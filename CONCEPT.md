@@ -19,7 +19,11 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   row of chips above; a photo can be put into one folder from the viewer or for several at once.
   Long press, or *Select*, turns the grid into a pick list: share, folder or delete several photos.
 - **Viewer.** Swipe between photos; Share (the system share sheet with the original file, a download
-  on the PC), Date, Folder, Delete; `⋯` for caption, details and "Save to this device".
+  on the PC), Star, Date, Folder, Delete; `⋯` for caption, details and "Save to this device".
+- **Top.** The star marks the best of the best. A chip "★ Top" at the front of the folder row shows
+  only starred photos, still by month, and each month's collage button becomes "Top collage"
+  there: the pearls of a month on one picture. Stars can be set for several photos at once in
+  the pick list; only the person who added a photo can star it.
 - **Collage.** Every month with two or more photos has a *Collage* button: the month's photos on one
   picture (up to 16, evenly picked if there are more), with the month's name, to share or save.
   Made from the thumbnails on this device, so it is quick and needs no download.
@@ -146,6 +150,7 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v2 (2026-10-26): the star and the Top view, Top collages; the app's own Supabase project.
 - v1 (2026-10-26): first release, tested against a stand-in cloud with two browsers (import,
   EXIF dates and orientation, folders, lock, sign-in, upload, second device, delete across devices,
   share sheet, collage) and with two accounts (rooms: create, invite link, join before and after

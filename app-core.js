@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -163,7 +163,8 @@ async function resealAll() {
 // ---------- the photo list: one encrypted record; images and thumbnails live in their own records ----------
 /* One photo:
    id, name (file name), type, w, h, size (bytes of the original), taken_at (ms; from the picture's
-   EXIF date, else the file date), created_at (when it was added), folder, caption, deleted,
+   EXIF date, else the file date), created_at (when it was added), folder, caption, star (one of
+   the best: the "Top" view shows only these), deleted,
    updated_at (last change of the fields above: the entry the cloud holds is sealed with it),
    room ('' = the person's own space, else the id of the shared room it lives in), uid (who added
    it; '' = added here before any sign-in, which counts as mine).
@@ -180,11 +181,11 @@ const isMine = p => !p.uid || (session ? p.uid === session.uid : p.uid === accou
 const roomById = id => rooms.find(r => r.id === id);
 const spaceName = id => id ? ((roomById(id) || {}).name || 'Room') : 'My photos';
 const spaceList = () => [{ id: '', name: 'My photos' }].concat(rooms.map(r => ({ id: r.id, name: r.name || 'Room' })));
-const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.deleted]);
+const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, !!p.deleted]);
 function migrate(p) {
   p.name = p.name == null ? '' : String(p.name); p.type = safeType(p.type); p.w = +p.w || 0; p.h = +p.h || 0; p.size = +p.size || 0;
   p.created_at = p.created_at || Date.now(); p.taken_at = p.taken_at || p.created_at; p.updated_at = p.updated_at || p.created_at;
-  p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : '';
+  p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : ''; p.star = !!p.star;
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
   p.room = p.room ? String(p.room) : ''; p.uid = p.uid ? String(p.uid) : '';
   return p;

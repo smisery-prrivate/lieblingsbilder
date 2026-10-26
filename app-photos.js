@@ -188,16 +188,19 @@ async function fillTile(el) {
   if (u) { const img = new Image(); img.alt = ''; img.decoding = 'async'; img.src = u; if (w) el.replaceChild(img, w); else el.prepend(img); }
   else if (w) w.textContent = p.th || p.have ? extOf(p.type).toUpperCase() : (session ? 'cloud' : 'not here');
 }
-const visible = () => inSpace().filter(p => !folderFilter || (folderFilter === '\u0000' ? !p.folder : p.folder === folderFilter));
+const TOP = '\u0001';      // the "Top" view: only starred photos, still by month
+const visible = () => inSpace().filter(p => !folderFilter || (folderFilter === TOP ? p.star : folderFilter === '\u0000' ? !p.folder : p.folder === folderFilter));
 function renderFolders() {
-  const names = folderNames(), box = $('folders');
-  if (!names.length) { box.hidden = true; if (folderFilter) folderFilter = ''; return; }
-  if (folderFilter && folderFilter !== '\u0000' && !names.includes(folderFilter)) folderFilter = '';
+  const names = folderNames(), box = $('folders'), stars = inSpace().filter(p => p.star).length;
+  if (!names.length && !stars) { box.hidden = true; if (folderFilter) folderFilter = ''; return; }
+  if (folderFilter === TOP && !stars) folderFilter = '';
+  if (folderFilter && folderFilter !== '\u0000' && folderFilter !== TOP && !names.includes(folderFilter)) folderFilter = '';
   box.hidden = false; box.innerHTML = '';
-  const chip = (label, val) => { const b = document.createElement('button'); b.className = 'pill' + (folderFilter === val ? ' on' : ''); b.textContent = label; b.addEventListener('click', () => { folderFilter = val; renderHome(); }); box.appendChild(b); };
+  const chip = (label, val) => { const b = document.createElement('button'); b.className = 'pill' + (folderFilter === val ? ' on' : '') + (val === TOP ? ' top' : ''); b.textContent = label; b.addEventListener('click', () => { folderFilter = val; renderHome(); }); box.appendChild(b); };
   chip('All', '');
+  if (stars) chip('★ Top ' + stars, TOP);
   for (const n of names) chip(n, n);
-  if (inSpace().some(p => !p.folder)) chip('No folder', '\u0000');
+  if (names.length && inSpace().some(p => !p.folder)) chip('No folder', '\u0000');
 }
 function renderHome() {
   if (!photosLoaded) return;
@@ -205,13 +208,14 @@ function renderHome() {
   const list = $('list'), items = visible();
   $('selectBtn').hidden = !items.length; $('selectBtn').textContent = selectMode ? 'Done' : 'Select'; $('selectBtn').classList.toggle('on', selectMode);
   $('selDock').hidden = !selectMode; $('addDock').hidden = selectMode;
-  const own = [...selected].every(id => { const p = byId(id); return p && isMine(p); });
-  $('selShare').disabled = !selected.size; $('selFolder').disabled = !selected.size || !own; $('selDelete').disabled = !selected.size || !own;
+  const own = [...selected].every(id => { const p = byId(id); return p && isMine(p); }), allStar = selected.size > 0 && [...selected].every(id => { const p = byId(id); return p && p.star; });
+  $('selShare').disabled = !selected.size; $('selFolder').disabled = !selected.size || !own; $('selDelete').disabled = !selected.size || !own; $('selStar').disabled = !selected.size || !own;
+  $('selStar').textContent = allStar ? '☆' : '★'; $('selStar').title = allStar ? 'Remove the star' : 'Mark as top';
   $('selShare').textContent = selected.size ? 'Share ' + selected.size : 'Share';
   list.classList.toggle('selmode', selectMode);
   if (!items.length) {
-    list.innerHTML = '<div class="empty"><b>' + (folderFilter ? 'Nothing in this folder yet' : space ? 'Nothing in this room yet' : 'No photos yet') + '</b>' +
-      (folderFilter ? 'Open a photo and give it this folder, or add new ones with the plus.' : space ? 'Tap the plus to add pictures here. Everyone in the room sees them.' : 'Tap the plus and pick your favourite pictures from the gallery. Or share a picture from any app to Lieblingsbilder.') +
+    list.innerHTML = '<div class="empty"><b>' + (folderFilter === TOP ? 'No top photos yet' : folderFilter ? 'Nothing in this folder yet' : space ? 'Nothing in this room yet' : 'No photos yet') + '</b>' +
+      (folderFilter === TOP ? 'Open a photo and tap the star: the best of the best collect here, by month.' : folderFilter ? 'Open a photo and give it this folder, or add new ones with the plus.' : space ? 'Tap the plus to add pictures here. Everyone in the room sees them.' : 'Tap the plus and pick your favourite pictures from the gallery. Or share a picture from any app to Lieblingsbilder.') +
       (SYNC && !session ? '<br><br>Everything is encrypted on this device. Sign in through the menu to keep an encrypted copy in your own cloud and see the same photos on another device.' : '') + '</div>';
     return;
   }
@@ -221,13 +225,13 @@ function renderHome() {
     if (k !== cur) {
       cur = k;
       const sec = document.createElement('section'); sec.className = 'month'; sec.dataset.month = k;
-      const n = items.filter(x => monthKey(x.taken_at) === k).length;
-      sec.innerHTML = '<div class="mhead"><h2>' + esc(fmtMonth(p.taken_at)) + '</h2><span class="n">' + n + (n === 1 ? ' photo' : ' photos') + '</span>' + (n >= 2 ? '<button class="collage">Collage</button>' : '') + '</div><div class="grid"></div>';
+      const n = items.filter(x => monthKey(x.taken_at) === k).length, st = items.filter(x => monthKey(x.taken_at) === k && x.star).length;
+      sec.innerHTML = '<div class="mhead"><h2>' + esc(fmtMonth(p.taken_at)) + '</h2><span class="n">' + n + (n === 1 ? ' photo' : ' photos') + (st && folderFilter !== TOP ? ' · ' + st + ' ★' : '') + '</span>' + (n >= 2 ? '<button class="collage">' + (folderFilter === TOP ? 'Top collage' : 'Collage') + '</button>' : '') + '</div><div class="grid"></div>';
       const cb = sec.querySelector('.collage'); if (cb) cb.addEventListener('click', () => makeCollage(k));
       grid = sec.querySelector('.grid'); frag.appendChild(sec);
     }
     const el = document.createElement('div'); el.className = 'tile' + (selected.has(p.id) ? ' sel' : ''); el.dataset.id = p.id;
-    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + (p.room && !isMine(p) && p.by ? '<span class="who">' + esc(p.by) + '</span>' : '');
+    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + (p.room && !isMine(p) && p.by ? '<span class="who">' + esc(p.by) + '</span>' : '') + (p.star ? '<span class="st">★</span>' : '');
     if (thumbUrls.has(p.id)) { const img = new Image(); img.alt = ''; img.src = thumbUrls.get(p.id); el.replaceChild(img, el.firstChild); }
     else if (io) io.observe(el); else fillTile(el);
     tileEvents(el, p);
@@ -290,6 +294,7 @@ async function selAction() {
   finally { selBusy = false; busy(false); renderHome(); }
 }
 $('selShare').addEventListener('click', selAction);
+$('selStar').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted && isMine(p)); if (!list.length) return; const on = !list.every(p => p.star); for (const p of list) p.star = on; save(); renderAll(); toast(on ? (list.length === 1 ? 'Marked as top' : list.length + ' marked as top') : 'Star removed'); });
 $('selFolder').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted && isMine(p)); if (list.length) folderSheet(list, () => setSelectMode(false)); });
 $('selDelete').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted && isMine(p)); if (list.length) confirmDelete(list, () => setSelectMode(false)); });
 function confirmDelete(list, after) {
@@ -327,7 +332,8 @@ async function renderView() {
   const p = curPhoto; if (!p || p.deleted) { if (current() === 'view') closeView(); return; }
   const my = ++viewSeq, img = $('viewImg'), msg = $('viewMsg');
   $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([p.room && !isMine(p) ? 'by ' + (p.by || 'someone in the room') : '', p.folder, p.name, p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
-  const mine = isMine(p); $('viewDate').hidden = !mine; $('viewFolder').hidden = !mine; $('viewDelete').hidden = !mine;
+  const mine = isMine(p); $('viewDate').hidden = !mine; $('viewFolder').hidden = !mine; $('viewDelete').hidden = !mine; $('viewStar').hidden = !mine;
+  $('viewStar').innerHTML = '<span>' + (p.star ? '★' : '☆') + '</span>' + (p.star ? 'Top' : 'Star'); $('viewStar').classList.toggle('on', !!p.star);
   if (viewUrl) { URL.revokeObjectURL(viewUrl); viewUrl = ''; }
   const tu = await thumbUrl(p); if (my !== viewSeq) return;
   if (tu) { img.src = tu; viewThumbUrl = tu; } else img.removeAttribute('src');
@@ -362,6 +368,7 @@ $('viewShare').addEventListener('click', async () => {
   try { await shareFiles([fileOf(p, await fullBlob(p))], p.name || fmtDate(p.taken_at)); } catch (e) { toast('Could not share: ' + errText(e)); }
   finally { viewSharing = false; busy(false); }
 });
+$('viewStar').addEventListener('click', () => { const p = curPhoto; if (!p || !isMine(p)) return; p.star = !p.star; save(); renderView(); renderHome(); toast(p.star ? 'Marked as top ★' : 'Star removed'); });
 $('viewDate').addEventListener('click', () => { if (curPhoto && isMine(curPhoto)) dateSheet(curPhoto); });
 $('viewFolder').addEventListener('click', () => { if (curPhoto && isMine(curPhoto)) folderSheet([curPhoto]); });
 $('viewDelete').addEventListener('click', () => { if (curPhoto && isMine(curPhoto)) confirmDelete([curPhoto]); });
@@ -393,7 +400,7 @@ async function makeCollage(k) {
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d'); ctx.fillStyle = '#fbf9f5'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#1e1c19'; ctx.font = '600 ' + Math.round(head * 0.46) + 'px -apple-system, "Segoe UI", Roboto, sans-serif'; ctx.textBaseline = 'middle';
-    ctx.fillText(fmtMonth(pick[0].taken_at), pad0, pad0 + head / 2);
+    ctx.fillText((folderFilter === TOP ? '★ ' : '') + fmtMonth(pick[0].taken_at), pad0, pad0 + head / 2);
     ctx.font = Math.round(head * 0.24) + 'px -apple-system, "Segoe UI", Roboto, sans-serif'; ctx.fillStyle = '#8a847b'; ctx.textAlign = 'right';
     ctx.fillText(list.length + (list.length === 1 ? ' photo' : ' photos') + (pick.length < list.length ? ' · ' + pick.length + ' shown' : ''), W - pad0, pad0 + head / 2);
     ctx.textAlign = 'left';
@@ -408,8 +415,8 @@ async function makeCollage(k) {
         ctx.drawImage(im, (w - sw) / 2, (h - sh) / 2, sw, sh, x, y, cell, cell);
       } finally { if (im.close) im.close(); }
     }
-    const blob = await toJpeg(cv, 0.9), name = 'Collage ' + k + '.jpg', url = URL.createObjectURL(blob);
-    openSheet(() => '<div class="grab"></div><h2>' + esc(fmtMonth(pick[0].taken_at)) + '</h2><img class="collage" alt="Collage" src="' + url + '"><button id="colShare" class="btn primary">Share</button><button id="colSave" class="btn">Save to this device</button>' +
+    const blob = await toJpeg(cv, 0.9), name = (folderFilter === TOP ? 'Top collage ' : 'Collage ') + k + '.jpg', url = URL.createObjectURL(blob);
+    openSheet(() => '<div class="grab"></div><h2>' + (folderFilter === TOP ? '★ ' : '') + esc(fmtMonth(pick[0].taken_at)) + '</h2><img class="collage" alt="Collage" src="' + url + '"><button id="colShare" class="btn primary">Share</button><button id="colSave" class="btn">Save to this device</button>' +
       '<div class="hint">Made from the small pictures on this device. The collage itself is not stored; make it again any time.</div>', () => {
         const f = new File([blob], name, { type: 'image/jpeg' });
         $('colShare').addEventListener('click', () => shareFiles([f], name));
