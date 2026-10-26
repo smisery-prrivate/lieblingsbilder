@@ -4,6 +4,7 @@
 let locked = false, softLock = false, unlocking = false, hiddenAt = 0, pinStep = false, hideTimer = null, softTimer = null, storageAtRisk = false;
 const unlockWaiters = [];
 const COVERED = ['home', 'view', 'sheet'];
+const lockAfterMs = () => (+settings.lockAfter || 0) * 1000;
 // Only work that ends by itself counts as in flight: pictures being stored, a sync, a list write
 // waiting, the share sheet or the photo picker in front of the app. A screen that is merely open
 // (the viewer) is remembered and reopened after the unlock instead.
@@ -111,13 +112,15 @@ document.addEventListener('visibilitychange', () => {
   clearTimeout(hideTimer);
   if (document.hidden) {
     hiddenAt = Date.now();
-    if (Vault.lockType() && !locked) hideTimer = setTimeout(() => { if (document.hidden) relock(); }, (settings.lockAfter || 60) * 1000 + 500);
+    // the photo picker is part of the app's own flow (the plus was tapped a moment ago): it does not count as leaving
+    if (Vault.lockType() && !locked && !pickerOpen) hideTimer = setTimeout(() => { if (document.hidden && !pickerOpen) relock(); }, lockAfterMs() + 500);
     return;
   }
   const away = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = 0;
   if (passive || restarting) return;
+  const fromPicker = pickerOpen;
   if (pickerOpen) setTimeout(() => { pickerOpen = false; }, 3000);
-  if (Vault.lockType() && !locked && away > (settings.lockAfter || 60) * 1000) relock();
+  if (Vault.lockType() && !locked && !fromPicker && away >= lockAfterMs()) relock();
   if (locked) { if (Vault.lockType() !== 'pin' && !unlocking) tryUnlock(); return; }
   if (!Vault.isOpen()) return;
   takeShared(); syncNow(); checkForUpdate();
@@ -161,7 +164,7 @@ function renderSheet() {
 }
 const LOCK_TEXT = {
   prf: ['🔒 Locked with fingerprint / screen lock', 'The key to your photos is released only by this phone\'s screen lock.'],
-  gate: ['🔒 Locked with fingerprint / screen lock (screen only)', 'This browser cannot tie the key itself to the screen lock, so the lock guards the app screen but not a copy of the stored data. A long password ties the key as well.'],
+  gate: ['⚠ Fingerprint / screen lock guards the screen only', 'This browser cannot tie the key itself to the screen lock: whoever can read this phone\'s storage can read the photos. Turn the lock off and use a password or long PIN instead, which ties the key.'],
   pin: ['🔒 Locked with a PIN or password', 'The key to your photos is derived from it.']
 };
 function pinProblem(a) {
@@ -174,9 +177,9 @@ function renderLockBox() {
   const type = Vault.lockType();
   if (type) {
     box.innerHTML = '<div class="statecard"><div class="t">' + LOCK_TEXT[type][0] + '</div><div class="s">' + LOCK_TEXT[type][1] + (Vault.hasOldKeys() ? '<br>Older photos are being moved under the new key in the background.' : '') + '</div></div>' +
-      '<div class="rowopt"><span>Lock again after</span><select id="lockAfter"><option value="5">5 seconds away</option><option value="60">1 minute away</option><option value="300">5 minutes away</option><option value="1800">30 minutes away</option></select></div>' +
+      '<div class="rowopt"><span>Lock again after</span><select id="lockAfter"><option value="0">as soon as the app leaves the screen</option><option value="5">5 seconds away</option><option value="60">1 minute away</option><option value="300">5 minutes away</option><option value="1800">30 minutes away</option></select></div>' +
       '<button class="btn" id="lockNow">Lock now</button><button class="btn quiet" id="lockOff">Turn the lock off</button>';
-    $('lockAfter').value = String(settings.lockAfter || 60);
+    $('lockAfter').value = String(+settings.lockAfter || 0);
     $('lockAfter').addEventListener('change', e => { settings.lockAfter = +e.target.value; saveSettings(); });
     $('lockNow').addEventListener('click', () => relock());
     $('lockOff').addEventListener('click', () => popup('Turn the lock off?', 'Anyone who can open this phone can then open your photos.', [
@@ -211,7 +214,7 @@ function renderLockBox() {
       if (!(await Vault.biometricAvailable())) { hint.textContent = 'This device or browser offers no fingerprint or screen lock here. Use a password or long PIN instead.'; return; }
       hint.textContent = 'Confirm with your fingerprint or screen lock. Your phone may ask twice.';
       const t = await Vault.setBiometric();
-      toast(t === 'gate' ? 'Lock is on. On this browser it guards the screen only.' : 'Lock is on'); renderLockBox(); resealAll();
+      if (t === 'gate') gatePopup(); else toast('Lock is on'); renderLockBox(); resealAll();
     } catch (e) { hint.textContent = e && e.name === 'NotAllowedError' ? 'Not set up: it was cancelled. Tap again to retry.' : 'Not set up: ' + errText(e); if (Vault.lockType()) { renderLockBox(); resealAll(); } }
     finally { setting = false; }
   });
@@ -236,5 +239,45 @@ function renderRoomBox() {
     const j = parseJoin($('joinLink').value), hint = $('roomHint'); if (!j) { hint.textContent = 'That is not an invite link.'; return; } if (busyR) return;
     busyR = true; hint.textContent = 'Joining…';
     try { const res = await joinRoom(j); back(); if (res === 'joined') { toast('You joined "' + spaceName(j.id) + '".'); setSpace(j.id); syncNow(); } else if (res === 'already') toast('You are in this room already.'); } catch (e) { hint.textContent = errText(e); } finally { busyR = false; }
+  });
+}
+
+// this browser could not tie the key to the screen lock: say so at once, and offer the lock that does
+function gatePopup() {
+  popup('Only the screen is guarded', 'This browser cannot tie the key to your fingerprint or screen lock, so a copy of this phone\'s storage would still open your photos. A password or long PIN ties the key. Use that instead?',
+    [{ label: 'Use a password or PIN', cls: 'primary', fn: async () => { try { await Vault.clearLock(); } catch (e) {} pinStep = true; openSheet(); } }, { label: 'Keep the screen lock', cls: 'quiet' }]);
+}
+
+// ---------- the lock is set up at the first start, before anything is stored ----------
+// Whoever can open this phone must not be able to read the photos: the app asks for the lock
+// before the first picture, with the fingerprint as the first choice. "Not now" asks again at the
+// next start; nothing is stored without a lock unless the owner decides so every time.
+function offerLock() {
+  return new Promise(resolve => {
+    const box = $('setup'), hint = $('setupHint'); box.hidden = false;
+    for (const id of COVERED) $(id).inert = true;
+    const done = msg => { box.hidden = true; for (const id of COVERED) $(id).inert = false; if (msg) setTimeout(() => toast(msg), 300); resolve(); };
+    let busy = false;
+    $('setupBio').addEventListener('click', async () => {
+      if (busy) return; busy = true;
+      try {
+        if (!(await Vault.biometricAvailable())) { hint.textContent = 'This device or browser offers no fingerprint or screen lock here. Use a password or long PIN instead.'; return; }
+        hint.textContent = 'Confirm with your fingerprint or screen lock. Your phone may ask twice.';
+        const t = await Vault.setBiometric();
+        if (t === 'gate') { hint.textContent = 'This browser can only guard the screen, not the key itself. Better: a password or long PIN.'; $('setupBio').hidden = true; $('setupGateOk').hidden = false; return; }
+        done('Lock is on');
+      } catch (e) { hint.textContent = e && e.name === 'NotAllowedError' ? 'Not set up: it was cancelled. Tap again to retry.' : 'Not set up: ' + errText(e); if (Vault.lockType()) done(); }
+      finally { busy = false; }
+    });
+    $('setupGateOk').addEventListener('click', () => done('Lock is on. On this browser it guards the screen only.'));
+    $('setupPinBtn').addEventListener('click', () => { $('setupPinForm').hidden = false; $('setupPinBtn').hidden = true; setTimeout(() => $('setupPin1').focus(), 50); });
+    $('setupPinSave').addEventListener('click', async () => {
+      const a = $('setupPin1').value, b = $('setupPin2').value; if (busy) return;
+      const prob = pinProblem(a); if (prob) { hint.textContent = prob; return; }
+      if (a !== b) { hint.textContent = 'The two entries differ.'; return; }
+      busy = true; hint.textContent = 'Setting up…';
+      try { if (Vault.lockType() === 'gate') await Vault.clearLock(); await Vault.setPin(a); done('Lock is on'); } catch (e) { hint.textContent = 'Not set up: ' + errText(e); if (Vault.lockType()) done(); } finally { busy = false; }
+    });
+    $('setupSkip').addEventListener('click', () => done(''));
   });
 }

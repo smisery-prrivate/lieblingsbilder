@@ -39,10 +39,10 @@ function writeGuard() {
 }
 
 // ---------- settings (not sensitive, plain) ----------
-let settings = { lockAfter: 60, keepAll: false };      // keepAll: download every full-size photo to this device, not only the thumbnails
-const LOCK_AFTER = [5, 60, 300, 1800];
+let settings = { lockAfter: 0, keepAll: false };      // lockAfter: 0 = lock as soon as the app leaves the screen; keepAll: download every full-size photo to this device
+const LOCK_AFTER = [0, 5, 60, 300, 1800];
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SET_KEY) || '{}')); } catch (e) {}
-if (!LOCK_AFTER.includes(+settings.lockAfter)) settings.lockAfter = 60;      // only the offered values: nothing in plain storage can switch the lock off
+if (!LOCK_AFTER.includes(+settings.lockAfter)) settings.lockAfter = 0;      // only the offered values: nothing in plain storage can switch the lock off
 const saveSettings = () => { try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (e) {} };
 
 // ---------- IndexedDB ----------

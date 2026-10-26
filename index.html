@@ -131,15 +131,19 @@
   .popup .box button.danger { color: var(--danger); background: var(--danger-bg); border-color: transparent; }
   .popup .box button.quiet { background: transparent; border-color: transparent; color: var(--muted); font-weight: 500; margin-bottom: 0; }
 
-  #lock, #away { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 30px; text-align: center; }
+  #lock, #away, #setup { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 30px; text-align: center; }
   #away { z-index: 55; }
-  #lock .logo, #away .logo { width: 84px; height: 84px; border-radius: 24px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 40px; margin-bottom: 8px; }
-  #lock h2, #away h2 { font-size: 22px; max-width: 320px; }
-  #lock p, #away p { color: var(--muted); font-size: 15px; max-width: 300px; line-height: 1.5; }
-  #lock .btn, #away .btn { width: 100%; max-width: 320px; height: 56px; border: none; border-radius: 16px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 700; }
-  #lock input { width: 100%; max-width: 320px; height: 52px; border: 1px solid var(--line); border-radius: 14px; text-align: center; font-size: 20px; letter-spacing: .15em; background: var(--card); }
-  #lock .quiet { background: transparent; border: none; color: var(--muted); font-size: 14px; padding: 10px; }
+  #lock .logo, #away .logo, #setup .logo { width: 84px; height: 84px; border-radius: 24px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 40px; margin-bottom: 8px; }
+  #lock h2, #away h2, #setup h2 { font-size: 22px; max-width: 320px; }
+  #lock p, #away p, #setup p { color: var(--muted); font-size: 15px; max-width: 300px; line-height: 1.5; }
+  #lock .btn, #away .btn, #setup .btn { width: 100%; max-width: 320px; height: 56px; border: none; border-radius: 16px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 700; }
+  #lock input, #setup input { width: 100%; max-width: 320px; height: 52px; border: 1px solid var(--line); border-radius: 14px; text-align: center; font-size: 20px; letter-spacing: .15em; background: var(--card); }
+  #lock .quiet, #setup .quiet { background: transparent; border: none; color: var(--muted); font-size: 14px; padding: 10px; }
   #lockErr { color: var(--danger); font-size: 14px; min-height: 18px; }
+  #setup { z-index: 41; overflow-y: auto; justify-content: flex-start; padding-top: max(env(safe-area-inset-top), 40px); }
+  #setup .btn.second { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+  #setupHint { color: var(--danger); font-size: 14px; min-height: 18px; max-width: 320px; }
+  #setupPinForm { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 10px; }
 
   #toast { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 130px); transform: translateX(-50%); z-index: 50; background: rgba(30,28,25,.92); color: #fff; padding: 12px 16px; border-radius: 14px; font-size: 15px; display: none; align-items: center; gap: 14px; max-width: 92vw; pointer-events: none; }
   #toast.show { display: flex; }
@@ -207,6 +211,22 @@
   <button id="unlockBtn" class="btn">Unlock</button>
   <div id="lockErr"></div>
   <button id="lockReset" class="quiet">Can't unlock? Reset this app</button>
+</div>
+<div id="setup" hidden>
+  <div class="logo">🔒</div>
+  <h2>Lock your photos first</h2>
+  <p>Whoever can open this phone must not be able to see your photos. With a lock, the key to them is released only by your fingerprint or screen lock, or by a password or long PIN.</p>
+  <button id="setupBio" class="btn">Use fingerprint / screen lock</button>
+  <button id="setupGateOk" class="btn second" hidden>Keep the screen lock anyway</button>
+  <button id="setupPinBtn" class="btn second">Use a password or long PIN</button>
+  <div id="setupPinForm" hidden>
+    <input id="setupPin1" type="password" autocomplete="new-password" placeholder="Password or long PIN">
+    <input id="setupPin2" type="password" autocomplete="new-password" placeholder="Repeat">
+    <button id="setupPinSave" class="btn">Turn the lock on</button>
+    <p>8 characters or more with at least 4 letters, or a PIN of 12 digits or more. It cannot be recovered.</p>
+  </div>
+  <div id="setupHint"></div>
+  <button id="setupSkip" class="quiet">Not now (asked again next time)</button>
 </div>
 <div id="away" hidden>
   <div class="logo">⧉</div>

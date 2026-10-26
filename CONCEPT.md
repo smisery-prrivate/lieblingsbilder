@@ -27,7 +27,11 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   appears on every device that signs in and knows the password. A second device fetches the
   thumbnails first and the full picture when a photo is opened (or all of them: menu, "Keep every
   full-size photo here").
-- **Lock.** Optional. Fingerprint or screen lock, or a password or long PIN, exactly as in Snapdoc.
+- **Lock.** Asked for at the first start, before anything is stored: fingerprint or screen lock
+  first, a password or long PIN as the other way, exactly Snapdoc's lock. "Not now" asks again at
+  the next start. The lock closes as soon as the app leaves the screen (the photo picker does not
+  count as leaving); the delay can be lengthened in the menu. Whoever can open the phone sees the
+  lock screen, not the photos.
 - **Rooms.** Shared spaces, as simple as a chat: everyone in a room adds pictures and sees all of
   them, and only the person who added a picture can change or delete it. Own photos and the rooms
   are a vertical stack of screens like Stillzeit's: arrow bars above and below name the neighbour,
@@ -51,8 +55,8 @@ renamed so that both apps can live on one origin. The parts are kept apart on pu
 | **Room key** (random, held by the members; in the invite link's fragment, which never reaches the server; in the cloud only wrapped by each member's cloud key) | that room's entries and per-photo keys | that room, nothing of anyone's own photos or other rooms |
 | **Server** | ciphertext, sizes, stamps | cannot read, forge or swap: files carry the photo id, tag and kind inside the encryption |
 
-Honest limits, the same as in Snapdoc: a web page cannot scrub browser storage files, so turn the
-lock on before adding anything private; and all of the owner's GitHub Pages apps share one origin,
+Honest limits, the same as in Snapdoc: a web page cannot scrub browser storage files, which is why
+the lock is set up before the first picture; and all of the owner's GitHub Pages apps share one origin,
 so a script in a sibling app could reach this app's storage. A key-bound lock keeps the key out of
 reach even then; an address of its own is the full answer and is the owner's decision. The share
 sheet has one limit of its own: a shared picture lies in the browser's database unencrypted for the

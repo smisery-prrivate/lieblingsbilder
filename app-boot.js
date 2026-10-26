@@ -168,6 +168,7 @@ async function boot() {
     return;
   }
   if (state === 'locked') { showLock(false); await whenUnlocked(); if (!isOwner()) { instanceLost(); return; } }
+  else if (!Vault.lockType()) { await offerLock(); if (!isOwner()) { instanceLost(); return; } }      // no lock yet: asked before anything is stored, and at every start until one is set
   try { await loadPhotos(); } catch (e) { fatal('The stored photos could not be read (' + errText(e) + ').'); return; }
   await loadSession();
   if (tokens) { try { linkMsg = await adoptLink(tokens); } catch (e) { linkMsg = 'The sign-in link could not be used.'; } }

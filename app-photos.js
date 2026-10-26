@@ -104,12 +104,12 @@ const isImage = f => /^image\//i.test(f.type) || /\.(jpe?g|png|webp|gif|avif|hei
 function addFiles(all, source, target) {
   const files = all.filter(isImage);
   if (all.length && !files.length) { toast(all.length === 1 ? 'That file is not a picture.' : 'None of those files is a picture.'); return; }
-  if (!files.length || passive || locked) return;
+  if (!files.length || passive || !Vault.isOpen()) return;      // under a soft lock the vault is still open: pictures from the picker are stored, then the page restarts
   if (target == null) target = space;
   if (target && !roomById(target)) target = '';
   const res = { n: 0, dated: 0, undated: 0, big: 0, undecoded: 0, failed: 0 };
   for (const f of files) queue(async () => {
-    if (passive || locked) return;
+    if (passive || !Vault.isOpen()) return;
     if (f.size + 4096 > MAX_FILE) { res.big++; return; }
     try {
       const id = uid(), ex = await exifInfo(f), t = await makeThumb(f);
