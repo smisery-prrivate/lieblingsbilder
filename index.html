@@ -33,6 +33,17 @@
   .empty { color: var(--muted); font-size: 15px; text-align: center; padding: 60px 20px; line-height: 1.5; }
   .empty b { color: var(--ink); display: block; font-size: 17px; margin-bottom: 6px; }
   .vtag { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 6px; letter-spacing: 0; }
+  /* the stack of spaces (own photos, then each room): arrow bars above and below, swipe in the dock */
+  .nav { display: flex; justify-content: center; align-items: center; gap: 10px; color: var(--ink); font-size: 15px; font-weight: 600; height: 48px; border-radius: 16px; background: #ece7df; user-select: none; cursor: pointer; width: 100%; margin: 0 0 8px; }
+  .nav:active { background: #e2dcd2; }
+  .nav .tri { font-size: 18px; line-height: 1; color: var(--muted); }
+  .nav .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .navwrap { padding: 0 16px; }
+  .dock .nav { margin: 8px 0 0; }
+  .roomhead { display: flex; align-items: center; gap: 8px; padding: 0 16px 10px; font-size: 13px; color: var(--muted); }
+  .roomhead .pill { height: 32px; padding: 0 12px; color: var(--accent); }
+  .roomhead .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .who { position: absolute; left: 5px; bottom: 5px; font-size: 10px; color: #fff; background: rgba(30,28,25,.55); border-radius: 8px; padding: 1px 6px; max-width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* folders (chips) and the month sections */
   .chips { display: flex; gap: 8px; padding: 0 16px 10px; overflow-x: auto; scrollbar-width: none; }
@@ -144,18 +155,21 @@
 <section id="home" class="screen">
   <div class="col">
     <header class="top">
-      <div style="flex:1;min-width:0"><h1>Lieblingsbilder <span id="vtag" class="vtag"></span></h1></div>
+      <div style="flex:1;min-width:0"><h1 id="spaceTitle">My photos</h1><div class="subline" style="padding:0" id="appTag">Lieblingsbilder <span id="vtag" class="vtag"></span></div></div>
       <button id="selectBtn" class="pill" hidden>Select</button>
       <button id="menuBtn" class="pill">Menu</button>
     </header>
     <div id="syncline" class="subline"></div>
+    <div class="navwrap"><div id="navTop" class="nav" hidden><span class="tri">▲</span><span class="name"></span></div></div>
+    <div id="roomHead" class="roomhead" hidden><span class="n" id="roomInfo"></span><button id="roomInvite" class="pill">Invite</button></div>
     <div id="folders" class="chips" hidden></div>
     <div id="list" class="scroll"></div>
   </div>
-  <div class="dock" id="addDock">
+  <div class="dock" id="addDock" style="flex-direction:column">
     <button id="addBtn" class="fab" aria-label="Add photos from the gallery">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
+    <div id="navBottom" class="nav" hidden><span class="tri">▼</span><span class="name"></span></div>
   </div>
   <div class="dock" id="selDock" hidden>
     <button id="selShare" class="primary">Share</button>

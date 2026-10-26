@@ -148,14 +148,14 @@ function renderSheet() {
   if (!stack.includes('sheet')) return;
   if (sheetContent) { $('panel').innerHTML = sheetContent.html(); if (sheetContent.bind) sheetContent.bind(); return; }
   const n = alive().length, here = alive().filter(p => p.have).length;
-  $('panel').innerHTML = '<div class="grab"></div><h2>Cloud sync</h2><div id="syncBox"></div><h2>App lock</h2><div id="lockBox"></div>' +
+  $('panel').innerHTML = '<div class="grab"></div><h2>Rooms</h2><div id="roomBox"></div><h2>Cloud sync</h2><div id="syncBox"></div><h2>App lock</h2><div id="lockBox"></div>' +
     '<h2>Photos on this device</h2>' +
     '<div class="rowopt"><span>Keep every full-size photo here</span><select id="setKeep"><option value="0">Only the small pictures</option><option value="1">All photos</option></select></div>' +
     '<div class="hint">' + n + (n === 1 ? ' photo' : ' photos') + (SYNC && session ? ', ' + here + ' of them in full size on this device. The others are fetched from the cloud when you open them.' : ', all in full size on this device.') + '</div>' +
     '<h2>App</h2><div id="installBox"></div>' +
     '<div class="hint">Photos are encrypted on this device and encrypted again before they are uploaded. No cookies, no trackers, no third-party scripts.</div>' +
     '<div class="version">Lieblingsbilder · ' + VERSION + '</div>';
-  renderSyncBox(); renderLockBox(); renderInstallBox();
+  renderRoomBox(); renderSyncBox(); renderLockBox(); renderInstallBox();
   $('setKeep').value = settings.keepAll ? '1' : '0';
   $('setKeep').addEventListener('change', e => { settings.keepAll = e.target.value === '1'; saveSettings(); syncNow(); });
 }
@@ -214,5 +214,27 @@ function renderLockBox() {
       toast(t === 'gate' ? 'Lock is on. On this browser it guards the screen only.' : 'Lock is on'); renderLockBox(); resealAll();
     } catch (e) { hint.textContent = e && e.name === 'NotAllowedError' ? 'Not set up: it was cancelled. Tap again to retry.' : 'Not set up: ' + errText(e); if (Vault.lockType()) { renderLockBox(); resealAll(); } }
     finally { setting = false; }
+  });
+}
+
+// ---------- rooms in the menu: the list, a new room, a link to join ----------
+function renderRoomBox() {
+  const box = $('roomBox'); if (!box) return;
+  const ready = roomReady();
+  box.innerHTML = (rooms.length ? '<div class="list">' + rooms.map(r => '<div class="statecard"><div class="t">' + esc(r.name || 'Room') + '</div><div class="s">' + (r.members ? r.members + (r.members === 1 ? ' person' : ' people') : 'shared room') + '</div></div>').join('') + '</div>' : '<p>A room is a shared space: everyone in it adds pictures and sees all of them. Swipe up or down in the button area to move between your photos and your rooms.</p>') +
+    (ready ? '<input id="roomName" type="text" placeholder="New room, e.g. Family" maxlength="40" autocomplete="off"><button id="roomCreate" class="btn primary">Create the room</button>' +
+      '<input id="joinLink" type="text" placeholder="Paste an invite link to join" autocomplete="off" spellcheck="false"><button id="joinGo" class="btn">Join</button><div class="hint" id="roomHint"></div>'
+      : '<div class="hint">Rooms need cloud sync: sign in below and set the encryption password, then you can create a room or join one with a link.</div>');
+  if (!ready) return;
+  let busyR = false;
+  $('roomCreate').addEventListener('click', async () => {
+    const name = $('roomName').value.trim().slice(0, 40), hint = $('roomHint'); if (!name) { $('roomName').focus(); return; } if (busyR) return;
+    busyR = true; hint.textContent = 'Creating…';
+    try { const id = await createRoom(name); back(); setSpace(id); toast('Room created. Invite people with the Invite button.'); syncNow(); } catch (e) { hint.textContent = errText(e); } finally { busyR = false; }
+  });
+  $('joinGo').addEventListener('click', async () => {
+    const j = parseJoin($('joinLink').value), hint = $('roomHint'); if (!j) { hint.textContent = 'That is not an invite link.'; return; } if (busyR) return;
+    busyR = true; hint.textContent = 'Joining…';
+    try { const res = await joinRoom(j); back(); if (res === 'joined') { toast('You joined "' + spaceName(j.id) + '".'); setSpace(j.id); syncNow(); } else if (res === 'already') toast('You are in this room already.'); } catch (e) { hint.textContent = errText(e); } finally { busyR = false; }
   });
 }

@@ -85,7 +85,7 @@ const idb = (() => {
     async wipe() { for (const s of STORES) await tx(s, 'readwrite', o => o.clear()).catch(() => {}); }
   };
 })();
-const metaStore = { get: id => idb.get('meta', id), put: rec => idb.put('meta', rec), del: id => idb.del('meta', id) };
+const metaStore = { get: id => idb.get('meta', id), put: rec => idb.put('meta', rec), del: id => idb.del('meta', id), keys: () => idb.keys('meta') };
 
 // ---------- encrypted records: nothing readable is written to the device ----------
 const imgLabel = id => 'lb|img|' + id, thLabel = id => 'lb|th|' + id;
@@ -143,6 +143,7 @@ async function resealAll() {
         if (sr && sr.data) { const nb = await Vault.reseal(sr.data, aad); if (nb) await idb.cas('meta', id, c => c && sameIv(c.data, sr.data) ? { id, data: nb } : undefined); }
       }
       if (!(await Vault.resealCloudKey(session ? session.uid : ''))) break;
+      if (!(await Vault.resealRoomKeys(session ? session.uid : account))) break;
       let under = true;
       for (const [id, aad] of [['photos', 'lb|photos']].concat(SMALL)) { const r = await idb.get('meta', id); if (r && r.data && (await Vault.reseal(r.data, aad)) !== null) under = false; }
       if (!under) break;
@@ -163,34 +164,46 @@ async function resealAll() {
 /* One photo:
    id, name (file name), type, w, h, size (bytes of the original), taken_at (ms; from the picture's
    EXIF date, else the file date), created_at (when it was added), folder, caption, deleted,
-   updated_at (last change of the fields above: the entry the cloud holds is sealed with it).
+   updated_at (last change of the fields above: the entry the cloud holds is sealed with it),
+   room ('' = the person's own space, else the id of the shared room it lives in), uid (who added
+   it; '' = added here before any sign-in, which counts as mine).
    On this device: have (the full image is stored here), th (the thumbnail is stored here).
    Cloud: tag (the name part of the uploaded files), pk (this photo's own key, wrapped by the cloud
    key), up (both files accepted for this tag),
    srv (the updated_at the cloud entry carries; -1 = send ours again), seen (server stamp of the
    entry last seen), cloudPurged, owed (object names still to be removed). */
 let photos = [], snap = {}, foreignDirty = false, photosLoaded = false, cursors = {}, account = '';
+// rooms: the shared spaces this person is in: { id, name, token (invite token: members may invite), created_by, joined_at }
+let rooms = [], space = '';      // space: '' = own photos, else a room id (the screen that is open)
+try { space = localStorage.getItem('lb.space') || ''; } catch (e) {}
+const isMine = p => !p.uid || (session ? p.uid === session.uid : p.uid === account);
+const roomById = id => rooms.find(r => r.id === id);
+const spaceName = id => id ? ((roomById(id) || {}).name || 'Room') : 'My photos';
+const spaceList = () => [{ id: '', name: 'My photos' }].concat(rooms.map(r => ({ id: r.id, name: r.name || 'Room' })));
 const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.deleted]);
 function migrate(p) {
   p.name = p.name == null ? '' : String(p.name); p.type = safeType(p.type); p.w = +p.w || 0; p.h = +p.h || 0; p.size = +p.size || 0;
   p.created_at = p.created_at || Date.now(); p.taken_at = p.taken_at || p.created_at; p.updated_at = p.updated_at || p.created_at;
   p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : '';
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
+  p.room = p.room ? String(p.room) : ''; p.uid = p.uid ? String(p.uid) : '';
   return p;
 }
-const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '' } : { photos: [], cursors: {}, account: '' };
+const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', rooms: Array.isArray(v.rooms) ? v.rooms : [] } : { photos: [], cursors: {}, account: '', rooms: [] };
 async function loadPhotos() {
   const r = await idb.get('meta', 'photos'); let v = null;
   if (r) v = await Vault.openJson(r.data, 'lb|photos');
   const u = unpackList(v);
-  photos = u.photos.map(migrate); cursors = u.cursors; account = u.account; snap = {};
+  photos = u.photos.map(migrate); cursors = u.cursors; account = u.account; rooms = u.rooms; snap = {};
   for (const p of photos) snap[p.id] = sigOf(p);
+  if (space && !roomById(space)) space = '';
   photosLoaded = true;
 }
 async function mergeStored() {           // another tab wrote meanwhile: adopt what is newer there
   let stored; try { const r = await idb.get('meta', 'photos'); if (!r) return; stored = unpackList(await Vault.openJson(r.data, 'lb|photos')); } catch (e) { return; }
   for (const k in stored.cursors) cursors[k] = Math.max(cursors[k] || 0, stored.cursors[k] || 0);
   if (stored.account && !account) account = stored.account;
+  for (const r of stored.rooms) if (!roomById(r.id)) rooms.push(r);
   for (const s of stored.photos) {
     migrate(s); const p = photos.find(x => x.id === s.id);
     if (!p) { photos.push(s); snap[s.id] = sigOf(s); }
@@ -208,7 +221,7 @@ function persist() {
     persistQueued = false;
     if (passive) return false;
     if (foreignDirty) { foreignDirty = false; await mergeStored(); }
-    await idb.put('meta', { id: 'photos', data: await Vault.sealJson({ photos, cursors, account }, 'lb|photos') });
+    await idb.put('meta', { id: 'photos', data: await Vault.sealJson({ photos, cursors, account, rooms }, 'lb|photos') });
     persistFailed = false;
     try { localStorage.setItem(TICK_KEY, Date.now() + '.' + Math.random()); } catch (e) {}
     return true;
@@ -231,7 +244,8 @@ async function purgePhotoData(p) {
   await idb.del('images', p.id).catch(() => {}); await idb.del('thumbs', p.id).catch(() => {});
   p.have = false; p.th = false; dropThumbUrl(p.id);
 }
-const folderNames = () => [...new Set(alive().map(p => p.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+const inSpace = () => alive().filter(p => p.room === space);
+const folderNames = () => [...new Set(inSpace().map(p => p.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
 // ---------- work queue (imports, downloads on demand) ----------
 let q = Promise.resolve(), qLen = 0, busyN = 0;
@@ -266,7 +280,7 @@ function leave(name) {
 }
 window.addEventListener('popstate', e => {
   const st = e.state; navPending = 0;
-  if (/[#&](access_token|error|error_code)=/.test(location.hash)) { linkOpened(); return; }
+  if (/[#&](access_token|error|error_code|join)=/.test(location.hash)) { linkOpened(); return; }
   if (locked && !lockTop()) { history.pushState(histState(), ''); drainNav(); return; }
   if (!st || st.b !== BOOT_ID) {
     if (stack.length > 1) { leave(stack.pop()); history.replaceState(histState(), ''); applyStack(); renderAll(); }
