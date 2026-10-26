@@ -108,9 +108,9 @@ restarts the page so no decrypted picture stays in memory.
 
 Like Snapdoc, the app gets its **own Supabase project**.
 
-1. supabase.com → new project, EU region. Project Settings → API: put the URL and the publishable
-   key into `config.js`, and narrow `connect-src` in `index.html` from `https://*.supabase.co` to
-   that one address.
+1. supabase.com → new project, EU region (done 2026-10-26: organisation "Lieblingsbilder", project
+   `bqvibovnrhwgavwkrsbc`, Frankfurt). Project Settings → API: the URL and the publishable key go
+   into `config.js`, and `connect-src` in `index.html` names that one address.
 2. SQL Editor → paste and run `supabase-schema.sql`.
 3. Authentication → URL Configuration: Site URL and redirect URL = the app's address (with the
    trailing slash, e.g. `https://smisery-prrivate.github.io/braindump/photos/`).

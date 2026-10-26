@@ -7,6 +7,6 @@
 // If the project address changes, also change the connect-src entry of the
 // Content-Security-Policy in index.html.
 window.APP_CONFIG = window.APP_CONFIG || {
-  supabaseUrl: '',
-  supabaseKey: ''
+  supabaseUrl: 'https://bqvibovnrhwgavwkrsbc.supabase.co',
+  supabaseKey: 'sb_publishable_sQpNABz4i_TwCtBTyYR_iw_QjTJ6uHE'
 };
