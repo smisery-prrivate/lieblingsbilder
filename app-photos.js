@@ -231,7 +231,8 @@ function renderHome() {
       grid = sec.querySelector('.grid'); frag.appendChild(sec);
     }
     const el = document.createElement('div'); el.className = 'tile' + (selected.has(p.id) ? ' sel' : ''); el.dataset.id = p.id;
-    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + (p.room && !isMine(p) && p.by ? '<span class="who">' + esc(p.by) + '</span>' : '') + (p.star ? '<span class="st">★</span>' : '');
+    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + (p.room && !isMine(p) && p.by ? '<span class="who">' + esc(p.by) + '</span>' : '') +
+      (isMine(p) ? '<button class="starbtn' + (p.star ? ' on' : '') + '" title="' + (p.star ? 'Remove the star' : 'Mark as top') + '" aria-label="Star">' + (p.star ? '★' : '☆') + '</button>' : (p.star ? '<span class="st">★</span>' : ''));
     if (thumbUrls.has(p.id)) { const img = new Image(); img.alt = ''; img.src = thumbUrls.get(p.id); el.replaceChild(img, el.firstChild); }
     else if (io) io.observe(el); else fillTile(el);
     tileEvents(el, p);
@@ -241,8 +242,12 @@ function renderHome() {
 }
 // tap opens (or picks, in select mode); a long press starts picking
 let pressTimer = null, pressed = false;
+// a tap on the star corner marks the photo as top (or takes the star away) without opening it
+function setStar(p, on) { if (!isMine(p) || p.star === on) return; p.star = on; save(); renderHome(); if (curPhoto === p) renderView(); }
 function tileEvents(el, p) {
-  el.addEventListener('pointerdown', e => { pressed = false; clearTimeout(pressTimer); if (e.button) return; pressTimer = setTimeout(() => { pressed = true; if (!selectMode) setSelectMode(true); toggleSel(p.id); }, 450); });
+  const sb = el.querySelector('.starbtn');
+  if (sb) sb.addEventListener('click', e => { e.stopPropagation(); clearTimeout(pressTimer); pressed = false; setStar(p, !p.star); });
+  el.addEventListener('pointerdown', e => { pressed = false; clearTimeout(pressTimer); if (e.button || e.target.closest('.starbtn')) return; pressTimer = setTimeout(() => { pressed = true; if (!selectMode) setSelectMode(true); toggleSel(p.id); }, 450); });
   const cancel = () => clearTimeout(pressTimer);
   el.addEventListener('pointermove', cancel); el.addEventListener('pointercancel', cancel); el.addEventListener('pointerleave', cancel); el.addEventListener('pointerup', cancel);
   el.addEventListener('contextmenu', e => e.preventDefault());
@@ -355,9 +360,16 @@ function stepView(dir) {
   if (!n) return;
   curPhoto = n; if (viewUrl) URL.revokeObjectURL(viewUrl); viewUrl = ''; renderView();
 }
-let swipeX = null, swipeY = null;
+let swipeX = null, swipeY = null, lastTap = 0;
 $('viewStage').addEventListener('pointerdown', e => { if (e.isPrimary) { swipeX = e.clientX; swipeY = e.clientY; } });
-$('viewStage').addEventListener('pointerup', e => { if (swipeX == null) return; const dx = e.clientX - swipeX, dy = e.clientY - swipeY; swipeX = swipeY = null; if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) stepView(dx < 0 ? 1 : -1); });
+$('viewStage').addEventListener('pointerup', e => {
+  if (swipeX == null) return;
+  const dx = e.clientX - swipeX, dy = e.clientY - swipeY; swipeX = swipeY = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { stepView(dx < 0 ? 1 : -1); lastTap = 0; return; }
+  if (Math.abs(dx) > 12 || Math.abs(dy) > 12) { lastTap = 0; return; }
+  const now = Date.now();
+  if (now - lastTap < 350) { lastTap = 0; if (curPhoto && isMine(curPhoto)) folderSheet([curPhoto]); } else lastTap = now;      // two taps on the picture: the folder menu
+});
 $('viewStage').addEventListener('pointercancel', () => { swipeX = swipeY = null; });
 document.addEventListener('keydown', e => { if (current() !== 'view' || locked || stack[stack.length - 1] !== 'view') return; if (e.key === 'ArrowRight') stepView(1); else if (e.key === 'ArrowLeft') stepView(-1); else if (e.key === 'Escape') back(); });
 $('viewBack').addEventListener('click', back);
