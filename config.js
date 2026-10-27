@@ -6,7 +6,10 @@
 // Both values empty: the app runs on this device only, encrypted, without cloud sync.
 // If the project address changes, also change the connect-src entry of the
 // Content-Security-Policy in index.html.
+// googleClientId: the OAuth client id of the Google Cloud project for the Google Drive storage (a
+// public id by design, like Snapdoc's). Empty: the Drive section stays off and every file goes to Supabase.
 window.APP_CONFIG = window.APP_CONFIG || {
   supabaseUrl: 'https://bqvibovnrhwgavwkrsbc.supabase.co',
-  supabaseKey: 'sb_publishable_sQpNABz4i_TwCtBTyYR_iw_QjTJ6uHE'
+  supabaseKey: 'sb_publishable_sQpNABz4i_TwCtBTyYR_iw_QjTJ6uHE',
+  googleClientId: ''
 };

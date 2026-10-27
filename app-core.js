@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v3';
+const VERSION = 'v4';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -137,7 +137,7 @@ async function resealAll() {
       try { await idb.put('meta', mark); } catch (e) {}
       if (failed) break;
       if (!(await persist())) break;
-      const SMALL = [['session', 'lb|session']];
+      const SMALL = [['session', 'lb|session'], ['drive', 'lb|drive']];
       for (const [id, aad] of SMALL) {
         const sr = await idb.get('meta', id);
         if (sr && sr.data) { const nb = await Vault.reseal(sr.data, aad); if (nb) await idb.cas('meta', id, c => c && sameIv(c.data, sr.data) ? { id, data: nb } : undefined); }
@@ -170,7 +170,8 @@ async function resealAll() {
    it; '' = added here before any sign-in, which counts as mine).
    On this device: have (the full image is stored here), th (the thumbnail is stored here).
    Cloud: tag (the name part of the uploaded files), pk (this photo's own key, wrapped by the cloud
-   key), up (both files accepted for this tag),
+   key), st ('sb': the files are in the Supabase bucket, 'gd': in the owner's Google Drive, then
+   df and dt are the Drive file ids), up (both files accepted for this tag),
    srv (the updated_at the cloud entry carries; -1 = send ours again), seen (server stamp of the
    entry last seen), cloudPurged, owed (object names still to be removed). */
 let photos = [], snap = {}, foreignDirty = false, photosLoaded = false, cursors = {}, account = '';
@@ -188,6 +189,7 @@ function migrate(p) {
   p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : ''; p.star = !!p.star;
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
   p.room = p.room ? String(p.room) : ''; p.uid = p.uid ? String(p.uid) : '';
+  p.st = p.st === 'gd' ? 'gd' : 'sb'; p.df = p.df ? String(p.df) : ''; p.dt = p.dt ? String(p.dt) : '';
   return p;
 }
 const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', rooms: Array.isArray(v.rooms) ? v.rooms : [] } : { photos: [], cursors: {}, account: '', rooms: [] };

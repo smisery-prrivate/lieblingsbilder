@@ -247,7 +247,8 @@ function setStar(p, on) { if (!isMine(p) || p.star === on) return; p.star = on; 
 function tileEvents(el, p) {
   const sb = el.querySelector('.starbtn');
   if (sb) sb.addEventListener('click', e => { e.stopPropagation(); clearTimeout(pressTimer); pressed = false; setStar(p, !p.star); });
-  el.addEventListener('pointerdown', e => { pressed = false; clearTimeout(pressTimer); if (e.button || e.target.closest('.starbtn')) return; pressTimer = setTimeout(() => { pressed = true; if (!selectMode) setSelectMode(true); toggleSel(p.id); }, 450); });
+  // a long press opens the folders for this picture (and offers to pick several); in the pick list it picks
+  el.addEventListener('pointerdown', e => { pressed = false; clearTimeout(pressTimer); if (e.button || e.target.closest('.starbtn')) return; pressTimer = setTimeout(() => { pressed = true; if (selectMode) toggleSel(p.id); else if (isMine(p)) folderSheet([p], null, { more: true }); else { setSelectMode(true); toggleSel(p.id); } }, 450); });
   const cancel = () => clearTimeout(pressTimer);
   el.addEventListener('pointermove', cancel); el.addEventListener('pointercancel', cancel); el.addEventListener('pointerleave', cancel); el.addEventListener('pointerup', cancel);
   el.addEventListener('contextmenu', e => e.preventDefault());
@@ -309,17 +310,19 @@ function confirmDelete(list, after) {
 }
 
 // ---------- folders and dates ----------
-function folderSheet(list, after) {
-  const names = folderNames(), cur = list.length === 1 ? list[0].folder : '';
+function folderSheet(list, after, opts) {
+  const names = folderNames(), cur = list.length === 1 ? list[0].folder : '', more = !!(opts && opts.more);
   openSheet(() => '<div class="grab"></div><h2>Folder</h2><p>' + (list.length === 1 ? 'Put this photo into a folder, for example Family or Holidays.' : 'Put these ' + list.length + ' photos into a folder.') + '</p>' +
     '<div class="chips" id="fChips">' + names.map(n => '<button class="pill' + (n === cur ? ' on' : '') + '" data-f="' + esc(n) + '">' + esc(n) + '</button>').join('') + '</div>' +
     '<input id="fNew" type="text" placeholder="New folder" autocomplete="off" autocapitalize="sentences" maxlength="40"><button id="fSave" class="btn primary">Save</button>' +
-    (cur || list.some(p => p.folder) ? '<button id="fNone" class="btn quiet">No folder</button>' : ''), () => {
+    (cur || list.some(p => p.folder) ? '<button id="fNone" class="btn quiet">No folder</button>' : '') +
+    (more ? '<button id="fMore" class="btn">Select several…</button>' : ''), () => {
       const apply = f => { for (const p of list) p.folder = f; save(); if (after) after(); renderAll(); back(); toast(f ? 'Moved to ' + f : 'Folder removed'); };
       for (const b of $('fChips').querySelectorAll('button')) b.addEventListener('click', () => apply(b.dataset.f));
       $('fSave').addEventListener('click', () => { const f = $('fNew').value.trim().slice(0, 40); if (f) apply(f); else $('fNew').focus(); });
       $('fNew').addEventListener('keydown', e => { if (e.key === 'Enter') $('fSave').click(); });
       if ($('fNone')) $('fNone').addEventListener('click', () => apply(''));
+      if ($('fMore')) $('fMore').addEventListener('click', () => { back(); setTimeout(() => { setSelectMode(true); for (const p of list) if (!selected.has(p.id)) toggleSel(p.id); }, 50); });
     });
 }
 const localInput = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()); };

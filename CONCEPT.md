@@ -17,7 +17,9 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   which collage it joins, so monthly collages over the years are possible.
 - **Home.** Months, newest first, each a grid of thumbnails. Folders (Family, Holidays, …) are a
   row of chips above; a photo can be put into one folder from the viewer or for several at once.
-  Long press, or *Select*, turns the grid into a pick list: share, folder or delete several photos.
+  A long press on a tile opens the folders for that photo (move it with one tap; "Select
+  several…" there, or the *Select* button, turns the grid into a pick list: share, star, folder or
+  delete several photos).
 - **Viewer.** Swipe between photos; a double tap on the picture opens the folder menu; Share (the
   system share sheet with the original file, a download on the PC), Star, Date, Folder, Delete;
   `⋯` for caption, details and "Save to this device". Folders are views on the same photos:
@@ -86,6 +88,7 @@ restarts the page so no decrypted picture stays in memory.
 | `app-photos.js` | Adding pictures, the date from the picture, thumbnails, home, viewer, folders, collage |
 | `app-lock.js` | Lock screen, the menu and the small sheets |
 | `app-sync.js` | Sign-in, encryption password, sync loop, downloads on demand, rooms |
+| `app-drive.js` | Google Drive: the connection and the files of own photos |
 | `app-boot.js` | One active window, start-up order, updates, housekeeping |
 | `sw.js` | Offline shell (one complete release) and the share-sheet receiver |
 | `supabase-schema.sql` | Tables, policies and the private bucket (run once, safe to run again) |
@@ -111,6 +114,26 @@ restarts the page so no decrypted picture stays in memory.
   later is read from its beginning. Whoever adds a picture to a room is named inside the sealed
   entry by the part of their e-mail before the @.
 
+## Google Drive as the file store (since v4)
+
+Thousands of photos a year do not fit the small Supabase bucket. Once a Google account is
+connected in the menu (`app-drive.js`, Snapdoc's sign-in taken over: a plain redirect to Google
+and back, scope `drive.file`, no Google script, the token stored encrypted and good for an hour),
+the files of the owner's **own** photos go into a folder "Lieblingsbilder" of that Drive, sealed
+exactly as before: Google holds ciphertext, two files per photo, named `<photo id>.<tag>` and
+`….t`, each tagged with the photo id. The entry in Supabase says where the files are (`st`,
+`df`, `dt`), so every device of the same person fetches them from Drive, with its own connection
+to the same Google account. **Rooms stay in the Supabase bucket**: a room's files must be
+readable by every member, and a Drive belongs to one person. Deleting a photo moves its Drive
+files to the bin. When the hour is over, own photos wait for a tap on Reconnect (the status line
+says so); without a lock the app reconnects by itself at a quiet moment, like Snapdoc.
+
+Set-up (once, by the owner), as for Snapdoc: Google Cloud Console → project → enable the Google
+Drive API → OAuth consent screen (external, scope `.../auth/drive.file`) → Credentials → OAuth
+client ID, type "Web application", authorised JavaScript origin `https://smisery-prrivate.github.io`,
+authorised redirect URI `https://smisery-prrivate.github.io/lieblingsbilder/` → put the client id
+into `googleClientId` in `config.js`.
+
 ## Set-up (once, by the owner)
 
 Like Snapdoc, the app gets its **own Supabase project**.
@@ -133,18 +156,14 @@ The app keeps only thumbnails on a second device by default, fetches full pictur
 never decrypts more than it shows, so the list itself scales. The cloud bucket is the limit:
 thousands of photos a year at 2–5 MB each is several GB a year.
 
-- **Supabase Storage** (as built): 1 GB free; Pro is about USD 25 a month for 100 GB.
-- **Google Drive as the file store**: feasible, and Snapdoc already has the sign-in code for it
-  (`app-drive.js`, scope `drive.file`, no Google script loaded). Here the files would stay
-  encrypted (Snapdoc stores plain PDFs on Drive on purpose), so Google holds ciphertext only; the
-  entries, keys and sync stamps stay in Supabase, where they are small. 15 GB free, 100 GB for
-  about EUR 2 a month.
+- **Supabase Storage**: 1 GB free; Pro is about USD 25 a month for 100 GB. Holds the rooms.
+- **Google Drive as the file store** (built in v4, see above): the owner's own photos, encrypted;
+  15 GB free, 100 GB for about EUR 2 a month.
 - **Proton Drive**: no interface for third-party web apps (no OAuth, no public API); a static web
   app cannot write to it. Not an option unless Proton opens one.
 
-Recommendation: Google Drive for the ciphertext files, Supabase for everything small. The file
-store is one function pair in `app-sync.js` (`uploadPhoto`, `fetchFull`/`fetchThumb`), so the
-switch does not touch the rest.
+The file store is decided per photo in `uploadPhoto` and read back in `fetchFull` / `fetchThumb`
+(`app-sync.js`); the rest of the app does not care where a file lives.
 
 ## Release habit
 
@@ -153,6 +172,8 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v4 (2026-10-27): Google Drive as the file store for own photos (rooms stay in Supabase); a long
+  press on a tile opens the folders for that photo.
 - v3 (2026-10-27): the star right from the grid (star corner on each tile); a double tap on the
   picture in the viewer opens the folder menu.
 - v2 (2026-10-26): the star and the Top view, Top collages; the app's own Supabase project.

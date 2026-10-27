@@ -151,14 +151,14 @@ function renderSheet() {
   if (!stack.includes('sheet')) return;
   if (sheetContent) { $('panel').innerHTML = sheetContent.html(); if (sheetContent.bind) sheetContent.bind(); return; }
   const n = alive().length, here = alive().filter(p => p.have).length;
-  $('panel').innerHTML = '<div class="grab"></div><h2>Rooms</h2><div id="roomBox"></div><h2>Cloud sync</h2><div id="syncBox"></div><h2>App lock</h2><div id="lockBox"></div>' +
+  $('panel').innerHTML = '<div class="grab"></div><h2>Rooms</h2><div id="roomBox"></div><h2>Cloud sync</h2><div id="syncBox"></div><h2>Google Drive</h2><div id="driveBox"></div><h2>App lock</h2><div id="lockBox"></div>' +
     '<h2>Photos on this device</h2>' +
     '<div class="rowopt"><span>Keep every full-size photo here</span><select id="setKeep"><option value="0">Only the small pictures</option><option value="1">All photos</option></select></div>' +
     '<div class="hint">' + n + (n === 1 ? ' photo' : ' photos') + (SYNC && session ? ', ' + here + ' of them in full size on this device. The others are fetched from the cloud when you open them.' : ', all in full size on this device.') + '</div>' +
     '<h2>App</h2><div id="installBox"></div>' +
     '<div class="hint">Photos are encrypted on this device and encrypted again before they are uploaded. No cookies, no trackers, no third-party scripts.</div>' +
     '<div class="version">Lieblingsbilder · ' + VERSION + '</div>';
-  renderRoomBox(); renderSyncBox(); renderLockBox(); renderInstallBox();
+  renderRoomBox(); renderSyncBox(); renderDriveBox(); renderLockBox(); renderInstallBox();
   $('setKeep').value = settings.keepAll ? '1' : '0';
   $('setKeep').addEventListener('change', e => { settings.keepAll = e.target.value === '1'; saveSettings(); syncNow(); });
 }

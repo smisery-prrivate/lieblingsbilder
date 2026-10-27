@@ -131,7 +131,7 @@ function afterNav() {
 
 async function boot() {
   const vt = $('vtag'); if (vt) vt.textContent = VERSION;
-  let tokens = null, linkMsg = '', search = location.search, sharedN = '', joinReq = null;
+  let tokens = null, linkMsg = '', search = location.search, sharedN = '', joinReq = null, driveQp = null;
   let h = location.hash || ''; if (!h) { try { h = sessionStorage.getItem(LINKHASH_KEY) || ''; sessionStorage.removeItem(LINKHASH_KEY); } catch (e) {} }
   try {
     const qs = new URLSearchParams(location.search), code = qs.get('code');
@@ -141,7 +141,8 @@ async function boot() {
     sharedN = qs.get('shared') || '';
     for (const k of ['code', 'error', 'error_code', 'error_description', 'shared']) qs.delete(k);
     const rest = qs.toString(); search = rest ? '?' + rest : '';
-    joinReq = parseJoin(h);                                                                         // an invite link to a room: id, token and key, none of which reached the server
+    joinReq = parseJoin(h);
+    const qp0 = new URLSearchParams(h.slice(1)); if ((qp0.get('state') || '').startsWith(DRIVE_STATE + '.')) driveQp = qp0;      // back from Google                                                                         // an invite link to a room: id, token and key, none of which reached the server
     const qp = new URLSearchParams(h.slice(1));
     if (!tokens && qp.get('access_token') && qp.get('refresh_token')) tokens = { access_token: qp.get('access_token'), refresh_token: qp.get('refresh_token') };
     else if (!linkMsg && (qp.get('error') || qp.get('error_code'))) linkMsg = sentence(qp.get('error_code') || qp.get('error'));
@@ -155,8 +156,8 @@ async function boot() {
   if (tokens && !linkFresh) { tokens = null; linkMsg = 'This sign-in link was not requested from this browser, or it is older than an hour. Request a new one in the menu.'; }
   let force = false, stay = false, wipe = false;
   try { wipe = sessionStorage.getItem(WIPE_KEY) === '1'; force = sessionStorage.getItem(TAKE_KEY) === '1' || wipe; sessionStorage.removeItem(TAKE_KEY); stay = sessionStorage.getItem(STAY_KEY) === '1'; if (force) { sessionStorage.removeItem(STAY_KEY); stay = false; } } catch (e) {}
-  if (stay && !tokens && !sharedN && !joinReq) { passive = true; showAway(); return; }
-  let mine = true; try { mine = await acquireInstance(force || !!tokens || !!sharedN || !!joinReq); } catch (e) { mine = true; }      // pictures from the share sheet are like a link: this window takes over
+  if (stay && !tokens && !sharedN && !joinReq && !driveQp) { passive = true; showAway(); return; }
+  let mine = true; try { mine = await acquireInstance(force || !!tokens || !!sharedN || !!joinReq || !!driveQp); } catch (e) { mine = true; }      // pictures from the share sheet are like a link: this window takes over
   if (!mine) { passive = true; showAway(); return; }
   if (wipe) { try { await wipeNow(); } catch (e) {} try { sessionStorage.removeItem(WIPE_KEY); } catch (e) {} }
   try { if (!(await idb.get('meta', 'keys'))) { const shared = await idb.all('shared').catch(() => []); await idb.wipe(); for (const r of shared) await idb.put('shared', r).catch(() => {}); } } catch (e) {}      // no key record: nothing stored can be read; leftovers go, the parked pictures stay
@@ -168,9 +169,10 @@ async function boot() {
     return;
   }
   if (state === 'locked') { showLock(false); await whenUnlocked(); if (!isOwner()) { instanceLost(); return; } }
-  else if (!Vault.lockType()) { await offerLock(); if (!isOwner()) { instanceLost(); return; } }      // no lock yet: asked before anything is stored, and at every start until one is set
+  else if (!Vault.lockType() && !driveQp) { await offerLock(); if (!isOwner()) { instanceLost(); return; } }      // no lock yet: asked before anything is stored, and at every start until one is set
   try { await loadPhotos(); } catch (e) { fatal('The stored photos could not be read (' + errText(e) + ').'); return; }
-  await loadSession();
+  await loadSession(); await loadDrive();
+  let driveMsgBoot = ''; if (driveQp) { try { driveMsgBoot = await driveAdopt(driveQp); } catch (e) { driveMsgBoot = 'Google Drive was not connected: ' + errText(e); } }
   if (tokens) { try { linkMsg = await adoptLink(tokens); } catch (e) { linkMsg = 'The sign-in link could not be used.'; } }
   let joinMsg = '';
   if (joinReq) {                                                     // joined now, or kept (sealed) until sign-in and the encryption password are there
@@ -183,6 +185,8 @@ async function boot() {
   renderAll();
   if (linkMsg) popup('Sign-in link', linkMsg, [{ label: 'OK', cls: 'primary' }]);
   else if (joinMsg) { if (/^You joined/.test(joinMsg)) toast(joinMsg); else popup('Room invitation', joinMsg, [{ label: 'OK', cls: 'primary', fn: () => { if (!roomReady()) openSheet(); } }]); }
+  if (driveMsgBoot) popup('Google Drive', driveMsgBoot, [{ label: 'OK', cls: 'primary' }]);
+  else if (driveQp && drive) toast('Google Drive connected as ' + (drive.email || 'your account'));
   if (sharedN === 'err') toast('The shared pictures could not be received. Try again from the gallery.');
   takeShared();
 
@@ -219,5 +223,5 @@ setInterval(() => { if (passive) return; renderSyncLine(); syncNow(); }, 60000);
 
 window.lbDebug = { get photos() { return photos; }, get session() { return session; }, get keyNeed() { return keyNeed; }, get syncState() { return syncState + (syncMsg ? ': ' + syncMsg : ''); },
   get busy() { return syncing || qLen > 0 || persistQueued; }, get qLen() { return qLen; }, get passive() { return passive; }, get locked() { return locked; }, get updateReady() { return updateReady; },
-  get rooms() { return rooms; }, get space() { return space; }, syncNow, syncRetry, idb, Vault, relock, resealAll, housekeeping, takeShared, fetchFull, fetchThumb, createRoom, joinRoom, inviteLink, setSpace };
+  get rooms() { return rooms; }, get space() { return space; }, get drive() { return drive; }, get driveState() { return driveState; }, syncNow, syncRetry, idb, Vault, relock, resealAll, housekeeping, takeShared, fetchFull, fetchThumb, createRoom, joinRoom, inviteLink, setSpace };
 boot().catch(e => fatal('Unexpected error: ' + errText(e)));

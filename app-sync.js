@@ -162,7 +162,7 @@ let syncCtl = null; const upFail = new Map();
 function abortSync() { if (syncCtl) syncCtl.abort(); }
 function syncRetry() { upFail.clear(); if (syncState === 'error') setSyncState(''); syncNow(); }
 const sealedMeta = p => { const obj = p.deleted ? { del: true, u: p.updated_at }
-  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, tag: p.tag, pk: p.pk || '', by: p.room ? (p.by || myLabel()) : '', u: p.updated_at, del: false };
+  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', by: p.room ? (p.by || myLabel()) : '', u: p.updated_at, del: false };
   return p.room ? Vault.rsealJson(p.room, obj, 'lb|meta|' + p.id) : Vault.csealJson(obj, 'lb|meta|' + p.id); };
 const objName = (u, p, tag, thumb) => (p.room ? 'room/' + p.room : u) + '/' + p.id + '.' + tag + (thumb ? '.t' : '');
 // One entry from the cloud, applied here.
@@ -176,14 +176,14 @@ async function applyRow(row, room) {
   if (!!m.del !== del || +m.u !== upd) throw new Error('entry does not match its seal');
   if (!p0) {
     const n = migrate({ id, name: String(m.name || ''), type: safeType(m.type), w: +m.w || 0, h: +m.h || 0, size: +m.size || 0, taken_at: +m.taken_at || upd, created_at: +m.created_at || upd,
-      folder: String(m.folder || ''), caption: String(m.caption || ''), star: !!m.star, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), room, uid: who, by: String(m.by || '').slice(0, 40) });
+      folder: String(m.folder || ''), caption: String(m.caption || ''), star: !!m.star, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), room, uid: who, by: String(m.by || '').slice(0, 40) });
     photos.push(n); snap[id] = sigOf(n); return 'new';
   }
   const p = p0, before = sigOf(p), wasDeleted = p.deleted;
   if (p.room !== room) return 'skip';                              // the same id in another space: never
   p.seen = stamp; if (who && !p.uid) p.uid = who; if (m.by) p.by = String(m.by).slice(0, 40);
-  if (!del && !p.up && m.tag) { p.up = true; p.tag = String(m.tag); p.pk = String(m.pk || ''); }      // another device holds the files up already (or ours were accepted before the list was saved)
-  if (!del && m.tag && p.tag && m.tag !== p.tag && p.up) { p.owed = p.owed || []; for (const n of [objName(session.uid, p, p.tag, false), objName(session.uid, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); p.tag = String(m.tag); p.pk = String(m.pk || ''); }      // two devices uploaded the same photo: one set of files is enough
+  if (!del && !p.up && m.tag) { p.up = true; p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // another device holds the files up already (or ours were accepted before the list was saved)
+  if (!del && m.tag && p.tag && m.tag !== p.tag && p.up) { p.owed = p.owed || []; for (const n of [objName(session.uid, p, p.tag, false), objName(session.uid, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // two devices uploaded the same photo: one set of files is enough
   if (upd > p.updated_at) {                                       // the later change wins
     if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = String(m.folder || ''); p.caption = String(m.caption || ''); p.star = !!m.star; if (!p.name) p.name = String(m.name || ''); }
     p.deleted = del; p.updated_at = upd; p.srv = upd;
@@ -197,7 +197,7 @@ async function applyRow(row, room) {
       if (theirs > mine) { p.taken_at = +m.taken_at || p.taken_at; p.folder = String(m.folder || ''); p.caption = String(m.caption || ''); p.star = !!m.star; p.srv = upd; } else p.srv = -1;
     } else p.srv = upd;
   } else if (del && !p.deleted) {                                   // our later change keeps the photo, but the other device removed the files
-    if (p.have && isMine(p)) { p.up = false; p.tag = ''; p.pk = ''; p.srv = -1; }           // the picture here is the only one left: it goes up again under a fresh name and key
+    if (p.have && isMine(p)) { p.up = false; p.tag = ''; p.pk = ''; p.st = 'sb'; p.df = ''; p.dt = ''; p.srv = -1; }           // the picture here is the only one left: it goes up again under a fresh name and key
     else { p.deleted = true; p.updated_at = upd; p.srv = upd; await deletedElsewhere(p); }
   } else { p.srv = -1; if (p.deleted) p.cloudPurged = false; }    // the cloud holds an older entry than ours: send ours again
   if (snap[id] === before) snap[id] = sigOf(p);                   // a local change that is not saved yet is never swallowed
@@ -211,7 +211,8 @@ async function deletedElsewhere(p) {
 const owedFail = new Map();
 async function dropObj(u, p, name) {
   let ok = false;
-  try { const r = await api('DELETE', '/storage/v1/object/lb/' + name); ok = r.ok || r.status === 404 || (r.status === 400 && /not.?found/i.test(await r.text().catch(() => ''))); } catch (e) {}
+  if (name.startsWith('gd:')) { try { ok = !!(DRIVE && drive && driveTokenOk()) && await driveTrash(name.slice(3)); } catch (e) { if (e && e.reconnect) await driveLost(); } }
+  else try { const r = await api('DELETE', '/storage/v1/object/lb/' + name); ok = r.ok || r.status === 404 || (r.status === 400 && /not.?found/i.test(await r.text().catch(() => ''))); } catch (e) {}
   if (ok) { owedFail.delete(name); if (p.owed) { p.owed = p.owed.filter(n => n !== name); if (!p.owed.length) delete p.owed; } }
   else { p.owed = p.owed || []; if (!p.owed.includes(name)) p.owed.push(name); const f = owedFail.get(name), n = (f ? f.n : 0) + 1; owedFail.set(name, { n, until: Date.now() + Math.min(3600000, 60000 * Math.pow(4, n - 1)) }); }
   return ok;
@@ -255,23 +256,39 @@ async function openFile(p, buf, kind) {
   if (h.id !== p.id || h.k !== kind) throw new Error('the file does not belong to this photo');
   return new Blob([u8.subarray(4 + hl)], { type: kind === 't' ? 'image/jpeg' : p.type });
 }
+// a file of a photo that lives in Google Drive: this device needs the same Google account connected
+async function driveGet(id) {
+  if (!DRIVE) throw new Error('This photo lives in Google Drive, which is not set up in this version.');
+  if (!drive) throw new Error('This photo lives in Google Drive. Connect the same Google account in the menu to see it.');
+  if (!driveTokenOk()) { setDriveState('reconnect', ''); throw new Error('Google Drive needs a tap to reconnect (menu).'); }
+  if (!id) throw new Error('This photo has no file in Drive.');
+  try { return await driveDownload(id); } catch (e) { if (e && e.reconnect) { await driveLost(); throw new Error('Google Drive needs a tap to reconnect (menu).'); } throw e; }
+}
 const progressMsg = (verb, i, n, p) => n > 1 ? verb + ' ' + i + ' of ' + n + ' · ' + Math.round((i - 1) / n * 100) + '% · ' + photoLabel(p) : verb + ' ' + photoLabel(p);
 async function uploadPhoto(p, u) {
   const tag = newTag(), full = await imgGet(p.id, p.type); if (!full) { p.have = false; throw new Error('"' + photoLabel(p) + '" is not on this device any more.'); }
   if (full.size + 4096 > MAX_FILE) throw new Error('"' + photoLabel(p) + '" is larger than 50 MB and cannot be synced.');
-  const was = p.tag, wasPk = p.pk, raw = Vault.newItemKey();
+  const was = p.tag, wasPk = p.pk, raw = Vault.newItemKey(), toDrive = driveWanted(p), made = [];
   p.tag = tag; p.pk = p.room ? await Vault.rwrapItemKey(p.room, raw, 'lb|pk|' + p.id) : await Vault.wrapItemKey(raw, 'lb|pk|' + p.id); if (!p.uid) p.uid = u;
   try {
     const put = async (blob, kind) => {
       const body = await sealFile(p, raw, blob, kind);
+      if (toDrive) { const id = await driveUpload(p, p.id + '.' + tag + (kind === 't' ? '.t' : ''), kind, new Blob([body], { type: 'application/octet-stream' })); made.push(id); return id; }
       const r = await api('POST', '/storage/v1/object/lb/' + objName(u, p, tag, kind === 't'), { headers: { 'Content-Type': 'application/octet-stream' }, body });
       if (!r.ok) throw await httpError('Uploading "' + photoLabel(p) + '"', r);
+      return '';
     };
-    await put(full, 'f');
+    const df = await put(full, 'f');
     const th = p.th ? await thumbGet(p.id) : null;
-    if (th) await put(th, 't');
-    p.up = true;
-  } catch (e) { p.tag = was; p.pk = wasPk; if (session) { p.owed = p.owed || []; for (const n of [objName(u, p, tag, false), objName(u, p, tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); } throw e; }
+    const dt = th ? await put(th, 't') : '';
+    p.st = toDrive ? 'gd' : 'sb'; p.df = df; p.dt = dt; p.up = true;
+  } catch (e) {
+    p.tag = was; p.pk = wasPk;
+    if (e && e.reconnect) await driveLost();
+    p.owed = p.owed || [];
+    for (const n of toDrive ? made.map(id => 'gd:' + id) : [objName(u, p, tag, false), objName(u, p, tag, true)]) if (!p.owed.includes(n)) p.owed.push(n);
+    throw e;
+  }
 }
 async function syncNow() {
   if (!SYNC || !session || !Vault.isOpen() || locked || passive) return;
@@ -304,7 +321,9 @@ async function syncNow() {
     if (moved && !(await persist())) throw new Error('The photo list could not be saved.');      // the bookmarks move only with the list
     renderAll();
     let upFailed = 0, upWhy = '';
-    const needsUp = p => !p.deleted && p.have && !p.up && isMine(p) && (!p.room || Vault.hasRoomKey(p.room));
+    const driveOut = !!(DRIVE && drive && !driveTokenOk());      // own photos wait for the tap; rooms go on
+    if (driveOut) driveNeedsToken();
+    const needsUp = p => !p.deleted && p.have && !p.up && isMine(p) && (!p.room || Vault.hasRoomKey(p.room)) && !(driveOut && !p.room);
     const upTotal = photos.filter(needsUp).length; let upDone = 0;
     for (const p of photos.slice()) {                             // upload the pictures added here; one failing photo does not hold up the rest
       if (stop()) return;
@@ -347,7 +366,8 @@ async function syncNow() {
           if (cur && (!cur.deleted || +cur.updated_at !== p.updated_at)) continue;      // the cloud moved on meanwhile: not ours to remove
         }
         let gone = true;
-        if (p.tag) for (const name of [objName(u, p, p.tag, false), objName(u, p, p.tag, true)]) { if (stop()) return; if (!(await dropObj(u, p, name))) gone = false; }
+        const names = p.st === 'gd' ? [p.df, p.dt].filter(Boolean).map(id => 'gd:' + id) : (p.tag ? [objName(u, p, p.tag, false), objName(u, p, p.tag, true)] : []);
+        for (const name of names) { if (stop()) return; if (!(await dropObj(u, p, name))) gone = false; }
         if (gone) p.cloudPurged = true;
       } catch (e) {}
     }
@@ -372,6 +392,7 @@ async function syncNow() {
       fDone++;
       try { if (!(await ensureSession())) return; await fetchFull(p, progressMsg('Fetching', fDone, fTotal, p)); } catch (e) { failed++; why = errText(e); }
     }
+    if (driveOut && photos.some(p => !p.deleted && p.have && !p.up && !p.room && isMine(p))) throw new Error('Google Drive needs a tap to reconnect (menu) before your new photos can be uploaded.');
     if (unreadable) throw new Error(unreadable + (unreadable === 1 ? ' entry' : ' entries') + ' in the cloud cannot be opened with the key on this device.');
     if (upFailed) throw new Error(upFailed === 1 ? upWhy : upFailed + ' photos could not be uploaded. Last reason: ' + upWhy);
     if (entryFailed) throw new Error(entryFailed === 1 ? entryWhy : entryFailed + ' entries could not be saved. Last reason: ' + entryWhy);
@@ -388,7 +409,15 @@ function fetchShared(key, fn) { if (fetchJobs.has(key)) return fetchJobs.get(key
 async function fetchThumb(p) {
   if (!haveKeyFor(p) || !p.up || !p.tag || p.deleted) return null;
   return fetchShared('t' + p.id, async () => {
-    const u = session.uid, r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, true));
+    const u = session.uid;
+    if (p.st === 'gd') {
+      if (!p.dt) { const b = await fetchFull(p); if (!b) return null; const t = await makeThumb(b); if (!t) return null; if (!p.w && t.w) { p.w = t.w; p.h = t.h; } await thumbPut(p.id, t.blob); p.th = true; persist(); return t.blob; }
+      const blob = await openFile(p, await driveGet(p.dt), 't');
+      if (p.deleted || passive) return blob;
+      await thumbPut(p.id, blob); p.th = true; persist(); renderHome();
+      return blob;
+    }
+    const r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, true));
     if (r.status === 404 || r.status === 400) {                    // a photo this browser could not make a thumbnail of: the full picture stands in
       const b = await fetchFull(p); if (!b) return null;
       const t = await makeThumb(b); if (!t) return null;
@@ -407,9 +436,10 @@ async function fetchFull(p, msg) {
   if (!p.up || !p.tag) throw new Error('This photo has not reached the cloud yet.');
   return fetchShared('f' + p.id, async () => {
     const u = session.uid; if (msg) setSyncState('busy', msg);
-    const r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, false));
-    if (!r.ok) throw await httpError('Fetching "' + photoLabel(p) + '"', r);
-    const blob = await openFile(p, await r.arrayBuffer(), 'f');
+    let buf;
+    if (p.st === 'gd') buf = await driveGet(p.df);
+    else { const r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, false)); if (!r.ok) throw await httpError('Fetching "' + photoLabel(p) + '"', r); buf = await r.arrayBuffer(); }
+    const blob = await openFile(p, buf, 'f');
     if (p.deleted || passive) return blob;
     await imgPut(p.id, blob); p.have = true; persist();
     return blob;
@@ -443,6 +473,7 @@ function renderSyncLine() {
   const el = $('syncline'); el.className = 'subline';
   if (!SYNC) { el.textContent = 'Encrypted on this device'; return; }
   if (!session) { el.textContent = 'Encrypted on this device · tap to add cloud sync'; return; }
+  if (DRIVE && drive && driveState === 'reconnect' && (photos.some(p => !p.deleted && p.have && !p.up && !p.room) || photos.some(p => !p.deleted && p.st === 'gd' && !p.th))) { el.className = 'subline err'; el.textContent = 'Google Drive needs a tap to reconnect · tap here'; return; }
   if (!Vault.hasCloudKey(session.uid)) {
     el.className = 'subline err';
     el.textContent = syncState === 'error' ? '⚠ ' + syncMsg : keyNeed ? 'Cloud sync is waiting for your encryption password · tap here' : 'Connecting to the cloud…';
