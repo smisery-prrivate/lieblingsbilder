@@ -14,7 +14,7 @@ const workInFlight = () => qLen > 0 || syncing || persistQueued || Date.now() < 
 // soft = shown over a running app because work is still in flight; the page restarts (and the key
 // leaves memory) as soon as that work is done. Either way nothing under the lock can be operated.
 function showLock(soft) {
-  let n = 0; for (let i = stack.length - 1; i > 0 && (stack[i] === 'popup' || stack[i] === 'sheet'); i--) n++;
+  let n = 0; for (let i = stack.length - 1; i > 0 && (stack[i] === 'popup' || stack[i] === 'sheet' || stack[i] === 'fan'); i--) n++;
   if (n) { if (popupState) popupState.after = null; history.go(-n); }          // popups and the menu close without acting
   locked = true; softLock = !!soft;
   for (const id of COVERED) $(id).inert = true;

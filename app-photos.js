@@ -257,7 +257,7 @@ function tileEvents(el, p) {
     pressTimer = setTimeout(() => {
       pressTimer = null; pressed = true; setTimeout(() => { pressed = false; }, 600);      // the click that follows the press is swallowed
       if (navigator.vibrate) navigator.vibrate(20);
-      if (selectMode) toggleSel(p.id); else if (isMine(p)) folderSheet([p], null, { more: true }); else { setSelectMode(true); toggleSel(p.id); }
+      if (selectMode) toggleSel(p.id); else if (isMine(p)) openFan(el, p); else { setSelectMode(true); toggleSel(p.id); }
     }, 450);
   });
   // pointercancel is NOT the end of a press: browsers fire it when they take the gesture (the image
@@ -268,7 +268,37 @@ function tileEvents(el, p) {
   el.addEventListener('contextmenu', e => e.preventDefault());
   el.addEventListener('click', () => { if (pressed) { pressed = false; return; } if (selectMode) toggleSel(p.id); else openView(p); });
 }
-$('list').addEventListener('scroll', () => { clearTimeout(pressTimer); pressTimer = null; }, { passive: true });      // scrolling is not pressing
+$('list').addEventListener('scroll', () => { clearTimeout(pressTimer); pressTimer = null; if (fanFor) back(); }, { passive: true });      // scrolling is not pressing, and closes the fan
+// ---------- the fan: the folders, opened right under the pressed tile ----------
+// A small panel centred on the tile (above it when there is no room below): the existing folders
+// as chips, a field for a new one, "No folder", and "Select several". One tap moves the photo.
+let fanFor = null;
+function openFan(el, p) {
+  if (fanFor || locked || passive) return;
+  const fan = $('fan'), box = $('fanBox'), names = folderNames();
+  box.innerHTML = '<div class="fanchips">' + names.map(n => '<button class="pill' + (n === p.folder ? ' on' : '') + '" data-f="' + esc(n) + '">' + esc(n) + '</button>').join('') +
+    '<button class="pill new" id="fanNew">+ New folder</button></div>' +
+    '<div class="fannew" id="fanNewRow" hidden><input id="fanIn" type="text" placeholder="Folder name" maxlength="40" autocomplete="off" autocapitalize="sentences"><button id="fanSave" class="pill on">Save</button></div>' +
+    '<div class="fanrow">' + (p.folder ? '<button id="fanNone" class="link">No folder</button>' : '') + '<button id="fanMore" class="link">Select several…</button></div>';
+  fanFor = p; fan.hidden = false;
+  const r = el.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+  const w = Math.min(300, vw - 24); box.style.width = w + 'px';
+  const left = Math.max(12, Math.min(r.left + r.width / 2 - w / 2, vw - w - 12));
+  const h = box.offsetHeight, below = r.bottom + 8 + h <= vh - 8;
+  box.style.left = left + 'px'; box.style.top = (below ? r.bottom + 8 : Math.max(8, r.top - 8 - h)) + 'px';
+  box.classList.toggle('up', !below);
+  box.style.setProperty('--arrow', Math.max(14, Math.min(w - 14, r.left + r.width / 2 - left)) + 'px');
+  const apply = f => { p.folder = f; save(); renderAll(); back(); toast(f ? 'Moved to ' + f : 'Folder removed'); };
+  for (const b of box.querySelectorAll('button[data-f]')) b.addEventListener('click', () => apply(b.dataset.f));
+  $('fanNew').addEventListener('click', () => { $('fanNewRow').hidden = false; $('fanNew').hidden = true; setTimeout(() => { const i = $('fanIn'); if (i) i.focus(); }, 50); });      // the fan may be gone again by then
+  $('fanSave').addEventListener('click', () => { const f = $('fanIn').value.trim().slice(0, 40); if (f) apply(f); else $('fanIn').focus(); });
+  $('fanIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('fanSave').click(); });
+  if ($('fanNone')) $('fanNone').addEventListener('click', () => apply(''));
+  $('fanMore').addEventListener('click', () => { back(); setTimeout(() => { setSelectMode(true); if (!selected.has(p.id)) toggleSel(p.id); }, 50); });
+  push('fan');
+}
+function fanClosed() { fanFor = null; $('fan').hidden = true; $('fanBox').innerHTML = ''; }
+$('fan').addEventListener('pointerdown', e => { if (e.target === $('fan')) back(); });      // a tap beside the fan closes it
 function toggleSel(id) { if (selected.has(id)) selected.delete(id); else selected.add(id); const el = $('list').querySelector('.tile[data-id="' + id + '"]'); if (el) el.classList.toggle('sel', selected.has(id)); renderHome(); }
 function setSelectMode(on) { selectMode = on; if (!on) selected.clear(); renderHome(); }
 $('selectBtn').addEventListener('click', () => setSelectMode(!selectMode));

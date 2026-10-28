@@ -17,9 +17,10 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   which collage it joins, so monthly collages over the years are possible.
 - **Home.** Months, newest first, each a grid of thumbnails. Folders (Family, Holidays, …) are a
   row of chips above; a photo can be put into one folder from the viewer or for several at once.
-  A long press on a tile opens the folders for that photo (move it with one tap; "Select
-  several…" there, or the *Select* button, turns the grid into a pick list: share, star, folder or
-  delete several photos).
+  A long press on a tile fans the folders out right under it (above it when there is no room):
+  the existing folders as chips, a field for a new one, "No folder", and "Select several…",
+  which turns the grid into a pick list (share, star, folder or delete several photos), as does
+  the *Select* button. One tap on a chip moves the photo.
 - **Viewer.** Swipe between photos; a double tap on the picture opens the folder menu; Share (the
   system share sheet with the original file, a download on the PC), Star, Date, Folder, Delete;
   `⋯` for caption, details and "Save to this device". Folders are views on the same photos:
@@ -172,6 +173,7 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v6 (2026-10-28): the folders fan out under the pressed tile instead of a sheet from below.
 - v5 (2026-10-28): the long press survives the small moves of a finger (it did nothing on a phone).
 - v4 (2026-10-27): Google Drive as the file store for own photos (rooms stay in Supabase); a long
   press on a tile opens the folders for that photo.

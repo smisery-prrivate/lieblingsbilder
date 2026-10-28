@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -272,13 +272,14 @@ function push(name) { stack.push(name); history.pushState(histState(), ''); appl
 let navPending = 0; const navQueue = [];
 const afterPop = fn => { if (navPending) navQueue.push(fn); else fn(); };
 function drainNav() { const qq = navQueue.splice(0); for (const fn of qq) fn(); }
-const lockTop = () => { const t = stack[stack.length - 1]; return t === 'popup' || t === 'sheet'; };      // under the lock screen only its own popup may close
+const lockTop = () => { const t = stack[stack.length - 1]; return t === 'popup' || t === 'sheet' || t === 'fan'; };      // under the lock screen only its own popup may close
 function back() { if (navPending || (locked && !lockTop())) return; if (stack.length > 1) { navPending++; history.back(); } }
 // close the viewer, whatever lies on top of it, exactly once
 function closeView() { const go = () => { if (locked) { navQueue.push(go); return; } if (stack.includes('view') && !navPending) { navPending++; history.go(-(stack.length - stack.indexOf('view'))); } }; afterPop(go); }
 function leave(name) {
   if (name === 'view') leaveView();
   if (name === 'sheet') sheetClosed();
+  if (name === 'fan') fanClosed();
   if (name === 'popup') { const p = popupState; popupState = null; if (p && p.after) setTimeout(p.after, 0); }
 }
 window.addEventListener('popstate', e => {
