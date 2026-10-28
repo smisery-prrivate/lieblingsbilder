@@ -172,6 +172,7 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v5 (2026-10-28): the long press survives the small moves of a finger (it did nothing on a phone).
 - v4 (2026-10-27): Google Drive as the file store for own photos (rooms stay in Supabase); a long
   press on a tile opens the folders for that photo.
 - v3 (2026-10-27): the star right from the grid (star corner on each tile); a double tap on the

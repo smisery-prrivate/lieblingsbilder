@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v4';
+const VERSION = 'v5';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;

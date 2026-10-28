@@ -247,13 +247,28 @@ function setStar(p, on) { if (!isMine(p) || p.star === on) return; p.star = on; 
 function tileEvents(el, p) {
   const sb = el.querySelector('.starbtn');
   if (sb) sb.addEventListener('click', e => { e.stopPropagation(); clearTimeout(pressTimer); pressed = false; setStar(p, !p.star); });
-  // a long press opens the folders for this picture (and offers to pick several); in the pick list it picks
-  el.addEventListener('pointerdown', e => { pressed = false; clearTimeout(pressTimer); if (e.button || e.target.closest('.starbtn')) return; pressTimer = setTimeout(() => { pressed = true; if (selectMode) toggleSel(p.id); else if (isMine(p)) folderSheet([p], null, { more: true }); else { setSelectMode(true); toggleSel(p.id); } }, 450); });
-  const cancel = () => clearTimeout(pressTimer);
-  el.addEventListener('pointermove', cancel); el.addEventListener('pointercancel', cancel); el.addEventListener('pointerleave', cancel); el.addEventListener('pointerup', cancel);
+  // A long press opens the folders for this picture (and offers to pick several); in the pick list
+  // it picks. A finger never holds perfectly still, so the press survives small moves (Snapdoc's
+  // 10 px); a real move (a scroll) cancels it, and so does the browser taking the gesture.
+  let x0 = 0, y0 = 0;
+  el.addEventListener('pointerdown', e => {
+    pressed = false; clearTimeout(pressTimer); if (e.button || e.target.closest('.starbtn')) return;
+    x0 = e.clientX; y0 = e.clientY;
+    pressTimer = setTimeout(() => {
+      pressTimer = null; pressed = true; setTimeout(() => { pressed = false; }, 600);      // the click that follows the press is swallowed
+      if (navigator.vibrate) navigator.vibrate(20);
+      if (selectMode) toggleSel(p.id); else if (isMine(p)) folderSheet([p], null, { more: true }); else { setSelectMode(true); toggleSel(p.id); }
+    }, 450);
+  });
+  // pointercancel is NOT the end of a press: browsers fire it when they take the gesture (the image
+  // drag with a mouse, the context menu on a phone). A real scroll ends it, see the list's scroll listener.
+  const cancel = () => { clearTimeout(pressTimer); pressTimer = null; };
+  el.addEventListener('pointermove', e => { if (pressTimer && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) cancel(); });
+  el.addEventListener('pointerleave', cancel); el.addEventListener('pointerup', cancel);
   el.addEventListener('contextmenu', e => e.preventDefault());
   el.addEventListener('click', () => { if (pressed) { pressed = false; return; } if (selectMode) toggleSel(p.id); else openView(p); });
 }
+$('list').addEventListener('scroll', () => { clearTimeout(pressTimer); pressTimer = null; }, { passive: true });      // scrolling is not pressing
 function toggleSel(id) { if (selected.has(id)) selected.delete(id); else selected.add(id); const el = $('list').querySelector('.tile[data-id="' + id + '"]'); if (el) el.classList.toggle('sel', selected.has(id)); renderHome(); }
 function setSelectMode(on) { selectMode = on; if (!on) selected.clear(); renderHome(); }
 $('selectBtn').addEventListener('click', () => setSelectMode(!selectMode));
