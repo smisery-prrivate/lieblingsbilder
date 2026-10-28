@@ -185,7 +185,7 @@ async function applyRow(row, room) {
   if (!del && !p.up && m.tag) { p.up = true; p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // another device holds the files up already (or ours were accepted before the list was saved)
   if (!del && m.tag && p.tag && m.tag !== p.tag && p.up) { p.owed = p.owed || []; for (const n of [objName(session.uid, p, p.tag, false), objName(session.uid, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // two devices uploaded the same photo: one set of files is enough
   if (upd > p.updated_at) {                                       // the later change wins
-    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = String(m.folder || ''); p.caption = String(m.caption || ''); p.star = !!m.star; if (!p.name) p.name = String(m.name || ''); }
+    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = String(m.folder || ''); p.caption = String(m.caption || ''); p.star = !!m.star; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag && m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); } }      // the files moved (to Drive) on another device
     p.deleted = del; p.updated_at = upd; p.srv = upd;
     if (del && !wasDeleted) await deletedElsewhere(p);
     else if (!del && wasDeleted) { p.cloudPurged = false; p.have = false; p.th = false; }      // it comes back on another device: fetched again from the cloud
@@ -344,6 +344,33 @@ async function syncNow() {
       }
     }
     if (stop()) return;
+    // own photos still in the Supabase bucket move to Drive: the sealed bytes as they are (no key
+    // needed), one photo at a time; the entry then says where they are, and the bucket's copies go
+    // once the entry is accepted (owed objects). Stops by itself when nothing is left.
+    const toMove = p => settings.moveToDrive && !p.deleted && !p.room && isMine(p) && p.up && p.st !== 'gd' && !!p.tag;
+    if (settings.moveToDrive && DRIVE && drive && driveTokenOk()) {
+      const list = photos.filter(toMove); let i = 0;
+      for (const p of list) {
+        if (stop()) return;
+        i++; setSyncState('busy', 'Moving to Drive ' + i + ' of ' + list.length + ' · ' + photoLabel(p));
+        try {
+          const get = async thumb => { const r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, thumb)); if (r.status === 404 && thumb) return null; if (!r.ok) throw await httpError('Reading "' + photoLabel(p) + '"', r); return r.arrayBuffer(); };
+          const full = await get(false), th = p.th ? await get(true) : null, made = [];
+          try {
+            const df = await driveUpload(p, p.id + '.' + p.tag, 'f', new Blob([full], { type: 'application/octet-stream' })); made.push(df);
+            const dt = th ? await driveUpload(p, p.id + '.' + p.tag + '.t', 't', new Blob([th], { type: 'application/octet-stream' })) : ''; if (dt) made.push(dt);
+            p.owed = p.owed || []; for (const n of [objName(u, p, p.tag, false), objName(u, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n);      // the bucket's copies go after the entry
+            p.st = 'gd'; p.df = df; p.dt = dt;
+            save({ sync: false });
+          } catch (e) { p.owed = p.owed || []; for (const id of made) if (!p.owed.includes('gd:' + id)) p.owed.push('gd:' + id); throw e; }
+        } catch (e) {
+          if (e && e.reconnect) { await driveLost(); break; }
+          if (e instanceof TypeError || navigator.onLine === false || ctl.signal.aborted) break;
+          upFailed++; upWhy = 'Moving "' + photoLabel(p) + '" to Drive failed: ' + errText(e);
+        }
+      }
+      if (!photos.some(toMove)) { settings.moveToDrive = false; saveSettings(); renderDriveBox(); }
+    }
     let entryFailed = 0, entryWhy = '';
     for (const p of photos.slice()) {                             // write the entries that changed here, each one conditionally
       if (!entryDue(p)) continue;

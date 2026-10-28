@@ -127,7 +127,11 @@ exactly as before: Google holds ciphertext, two files per photo, named `<photo i
 to the same Google account. **Rooms stay in the Supabase bucket**: a room's files must be
 readable by every member, and a Drive belongs to one person. Deleting a photo moves its Drive
 files to the bin. When the hour is over, own photos wait for a tap on Reconnect (the status line
-says so); without a lock the app reconnects by itself at a quiet moment, like Snapdoc.
+says so); without a lock the app reconnects by itself at a quiet moment, like Snapdoc. Own photos
+that were uploaded to the Supabase bucket before Drive was connected move over on request
+(menu, "Move … to Drive"): the sealed bytes are copied as they are, one photo at a time, the
+entry then names Drive, and the bucket's copies go once the entry is accepted; it continues on
+its own across restarts until nothing is left.
 
 Set-up (once, by the owner), as for Snapdoc: Google Cloud Console → project → enable the Google
 Drive API → OAuth consent screen (external, scope `.../auth/drive.file`) → Credentials → OAuth
@@ -173,6 +177,7 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v7 (2026-10-28): own photos move from the Supabase bucket to Drive on request.
 - v6 (2026-10-28): the folders fan out under the pressed tile instead of a sheet from below.
 - v5 (2026-10-28): the long press survives the small moves of a finger (it did nothing on a phone).
 - v4 (2026-10-27): Google Drive as the file store for own photos (rooms stay in Supabase); a long

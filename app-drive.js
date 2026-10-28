@@ -147,11 +147,14 @@ function renderDriveBox() {
     return;
   }
   const n = drivePhotos().length, waiting = photos.filter(p => !p.deleted && p.have && !p.up && !p.room).length, err = driveState === 'error' || driveState === 'reconnect';
+  const left = photos.filter(p => !p.deleted && !p.room && isMine(p) && p.up && p.st !== 'gd').length;
   const line = driveState === 'reconnect' ? 'The connection has run out. Tap Reconnect to continue.' : driveState === 'error' ? driveMsg : n + (n === 1 ? ' photo' : ' photos') + ' in Drive' + (waiting ? ' · ' + waiting + ' waiting' : '');
   box.innerHTML = '<div class="statecard' + (err ? ' err' : '') + '"><div class="t">Google Drive · ' + esc(drive.email || '') + '</div><div class="s">Folder "' + esc(DRIVE.folder) + '" · ' + esc(line) + '</div></div>' +
     (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '<button id="driveNowBtn" class="btn">Sync now</button>') +
+    (left ? (settings.moveToDrive ? '<div class="hint">Moving ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive… (continues on its own)</div>' : '<button id="driveMove" class="btn">Move ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive</button>') : '') +
     '<button id="driveOff" class="btn quiet">Disconnect Google Drive</button>';
   if ($('driveRe')) $('driveRe').addEventListener('click', () => driveConnect(false));
   if ($('driveNowBtn')) $('driveNowBtn').addEventListener('click', () => { driveTried = false; syncRetry(); });
+  if ($('driveMove')) $('driveMove').addEventListener('click', () => { settings.moveToDrive = true; saveSettings(); renderDriveBox(); toast('Moving your photos to Drive. You can close the menu.'); syncRetry(); });
   $('driveOff').addEventListener('click', () => popup('Disconnect Google Drive?', 'The photos already in Drive stay there and can be shown again once it is connected. New photos go to the Supabase cloud meanwhile.', [{ label: 'Disconnect', cls: 'danger', fn: driveDisconnect }, { label: 'Keep it', cls: 'quiet' }]));
 }
