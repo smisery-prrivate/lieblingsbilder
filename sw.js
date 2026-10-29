@@ -3,7 +3,7 @@
 // install time and served only from this set, so the page never runs a mix of two versions and
 // starts at once without waiting for the network. A new release arrives as a new worker that
 // WAITS; the page asks for the switch itself at a quiet moment and restarts (see app-boot.js).
-const CACHE = 'lieblingsbilder-v7';
+const CACHE = 'lieblingsbilder-v8';
 const ASSETS = ['.', 'index.html', 'vault.js', 'app-core.js', 'app-photos.js', 'app-lock.js', 'app-sync.js', 'app-drive.js', 'app-boot.js', 'config.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

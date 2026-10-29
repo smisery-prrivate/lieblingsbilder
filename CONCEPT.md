@@ -177,6 +177,8 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v8 (2026-10-29): picked pictures are read at once, before they wait in the queue (a picker's file
+  can stop being readable meanwhile); a picture that cannot be stored says why.
 - v7 (2026-10-28): own photos move from the Supabase bucket to Drive on request.
 - v6 (2026-10-28): the folders fan out under the pressed tile instead of a sheet from below.
 - v5 (2026-10-28): the long press survives the small moves of a finger (it did nothing on a phone).

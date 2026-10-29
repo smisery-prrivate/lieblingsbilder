@@ -107,11 +107,16 @@ function addFiles(all, source, target) {
   if (!files.length || passive || !Vault.isOpen()) return;      // under a soft lock the vault is still open: pictures from the picker are stored, then the page restarts
   if (target == null) target = space;
   if (target && !roomById(target)) target = '';
-  const res = { n: 0, dated: 0, undated: 0, big: 0, undecoded: 0, failed: 0 };
-  for (const f of files) queue(async () => {
+  const res = { n: 0, dated: 0, undated: 0, big: 0, undecoded: 0, failed: 0, why: '' };
+  // The bytes are read right now, all at once: a file handed over by the picker can stop being
+  // readable while it waits behind others (Android, pictures a cloud gallery fetches on demand).
+  const reads = files.map(f => f.size + 4096 > MAX_FILE ? null : f.arrayBuffer().catch(e => (e instanceof Error ? e : new Error(String(e)))));
+  files.forEach((f0, i) => queue(async () => {
     if (passive || !Vault.isOpen()) return;
-    if (f.size + 4096 > MAX_FILE) { res.big++; return; }
+    if (f0.size + 4096 > MAX_FILE) { res.big++; return; }
     try {
+      const buf = await reads[i]; if (buf instanceof Error) throw new Error('the picture could not be read from the gallery (' + errText(buf) + ')');
+      const f = new File([buf], f0.name || '', { type: f0.type, lastModified: f0.lastModified });
       const id = uid(), ex = await exifInfo(f), t = await makeThumb(f);
       const taken = ex.taken || (f.lastModified > 0 && f.lastModified < Date.now() + 86400000 ? f.lastModified : Date.now());
       await imgPut(id, f);
@@ -123,15 +128,15 @@ function addFiles(all, source, target) {
       photos.unshift(p); snap[p.id] = sigOf(p);
       res.n++; if (ex.taken) res.dated++; else res.undated++; if (!t) res.undecoded++;
       save(); renderHome();
-    } catch (e) { res.failed++; }
-  });
+    } catch (e) { res.failed++; if (!res.why) res.why = errText(e); }
+  }));
   queue(async () => {
     const parts = [];
     if (res.n) parts.push(res.n === 1 ? '1 photo added' : res.n + ' photos added');
     if (res.undated) parts.push(res.undated === 1 ? '1 without a date in the picture: the file date was used (tap it to change the date)' : res.undated + ' without a date in the picture: the file date was used');
     if (res.undecoded) parts.push(res.undecoded === 1 ? '1 cannot be displayed by this browser; it is stored as it is' : res.undecoded + ' cannot be displayed by this browser; they are stored as they are');
     if (res.big) parts.push(res.big === 1 ? '1 file is larger than 50 MB and was skipped' : res.big + ' files are larger than 50 MB and were skipped');
-    if (res.failed) parts.push(res.failed === 1 ? '1 could not be stored' : res.failed + ' could not be stored');
+    if (res.failed) parts.push((res.failed === 1 ? '1 could not be stored' : res.failed + ' could not be stored') + (res.why ? ': ' + res.why : ''));
     if (parts.length) toast((target !== space && res.n ? 'In ' + spaceName(target) + ': ' : '') + parts.join(' · ') + '.');
     if (source === 'shared' && res.n && current() === 'home') { if (target !== space) setSpace(target); const first = photos.find(p => !p.deleted && p.room === target); if (first) scrollToMonth(monthKey(first.taken_at)); }
   });
