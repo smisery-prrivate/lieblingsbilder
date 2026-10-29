@@ -160,7 +160,7 @@ let syncCtl = null; const upFail = new Map();
 function abortSync() { if (syncCtl) syncCtl.abort(); }
 function syncRetry() { upFail.clear(); if (syncState === 'error') setSyncState(''); syncNow(); }
 const sealedMeta = p => { const obj = p.deleted ? { del: true, u: p.updated_at }
-  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', u: p.updated_at, del: false };
+  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, rot: p.rot || 0, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', u: p.updated_at, del: false };
   return p.folder ? Vault.fsealJson(p.folder, obj, 'lb|meta|' + p.id) : Vault.csealJson(obj, 'lb|meta|' + p.id); };
 const objName = (u, p, tag, thumb) => u + '/' + p.id + '.' + tag + (thumb ? '.t' : '');
 // One entry from the cloud, applied here.
@@ -174,7 +174,7 @@ async function applyRow(row, folder) {
   if (!!m.del !== del || +m.u !== upd) throw new Error('entry does not match its seal');
   if (!p0) {
     const n = migrate({ id, name: String(m.name || ''), type: safeType(m.type), w: +m.w || 0, h: +m.h || 0, size: +m.size || 0, taken_at: +m.taken_at || upd, created_at: +m.created_at || upd,
-      caption: String(m.caption || ''), star: !!m.star, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), folder });
+      caption: String(m.caption || ''), star: !!m.star, rot: +m.rot || 0, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), folder });
     photos.push(n); snap[id] = sigOf(n); return 'new';
   }
   const p = p0, before = sigOf(p), wasDeleted = p.deleted;
@@ -183,16 +183,16 @@ async function applyRow(row, folder) {
   if (!del && !p.up && m.tag) { p.up = true; p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // another device holds the files up already (or ours were accepted before the list was saved)
   if (!del && m.tag && p.tag && m.tag !== p.tag && p.up) { p.owed = p.owed || []; for (const n of [objName(session.uid, p, p.tag, false), objName(session.uid, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // two devices uploaded the same photo: one set of files is enough
   if (upd > p.updated_at) {                                       // the later change wins
-    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; p.caption = String(m.caption || ''); p.star = !!m.star; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag) { if (m.pk) p.pk = String(m.pk); if (m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); } } }      // moved to another folder (the key rewrapped) or the files moved (to Drive) on another device
+    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; p.caption = String(m.caption || ''); p.star = !!m.star; p.rot = [90, 180, 270].includes(+m.rot) ? +m.rot : 0; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag) { if (m.pk) p.pk = String(m.pk); if (m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); } } }      // moved to another folder (the key rewrapped) or the files moved (to Drive) on another device
     p.deleted = del; p.updated_at = upd; p.srv = upd;
     if (del && !wasDeleted) await deletedElsewhere(p);
     else if (!del && wasDeleted) { p.cloudPurged = false; p.have = false; p.th = false; }      // it comes back on another device: fetched again from the cloud
   } else if (upd === p.updated_at) {
     if (!!m.del !== !!p.deleted) {                                 // two devices stamped alike: a delete beats a live change, on both of them
       if (del) { p.deleted = true; p.srv = upd; await deletedElsewhere(p); } else { p.srv = -1; p.cloudPurged = false; }
-    } else if (!del && (p.folder !== folder || p.caption !== String(m.caption || '') || p.taken_at !== +m.taken_at || !!p.star !== !!m.star)) {      // equal stamps, different fields: decided alike everywhere
-      const mine = JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star]), theirs = JSON.stringify([+m.taken_at, folder, String(m.caption || ''), !!m.star]);
-      if (theirs > mine) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; if (m.pk) p.pk = String(m.pk); p.caption = String(m.caption || ''); p.star = !!m.star; p.srv = upd; } else p.srv = -1;
+    } else if (!del && (p.folder !== folder || p.caption !== String(m.caption || '') || p.taken_at !== +m.taken_at || !!p.star !== !!m.star || (p.rot || 0) !== (+m.rot || 0))) {      // equal stamps, different fields: decided alike everywhere
+      const mine = JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, p.rot || 0]), theirs = JSON.stringify([+m.taken_at, folder, String(m.caption || ''), !!m.star, +m.rot || 0]);
+      if (theirs > mine) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; if (m.pk) p.pk = String(m.pk); p.caption = String(m.caption || ''); p.star = !!m.star; p.rot = [90, 180, 270].includes(+m.rot) ? +m.rot : 0; p.srv = upd; } else p.srv = -1;
     } else p.srv = upd;
   } else if (del && !p.deleted) {                                   // our later change keeps the photo, but the other device removed the files
     if (p.have) { p.up = false; p.tag = ''; p.pk = ''; p.st = 'sb'; p.df = ''; p.dt = ''; p.srv = -1; }           // the picture here is the only one left: it goes up again under a fresh name and key

@@ -22,7 +22,7 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   which turns the grid into a pick list (share, star, folder or delete several photos), as does
   the *Select* button. One tap on a chip moves the photo.
 - **Viewer.** Swipe between photos; a double tap on the picture opens the folder menu; Share (the
-  system share sheet with the original file, a download on the PC), Star, Date, Folder, Delete;
+  system share sheet with the original file, a download on the PC), Star, Rotate, Date, Folder, Delete;
   `⋯` for caption, details and "Save to this device". Folders are views on the same photos:
   "All" always shows everything.
 - **Top.** The star marks the best of the best: a tap on the star corner of a tile, right in the
@@ -175,6 +175,10 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v11 (2026-10-29): Rotate in the viewer: a quarter turn per tap, stored as an angle in the sealed
+  entry (the picture stays as it is, nothing is uploaded again), shown on the tile, in the viewer and
+  in the collage; a shared or saved photo leaves as a JPEG turned the same way. No text selection
+  when the folder fan opens under a held finger.
 - v10 (2026-10-29): "+ New folder" in the folder row and the menu; the folder tidy runs one pass at a
   time (two at once had made an empty folder named after an id), and removes such folders and
   duplicate folders of one name by itself.

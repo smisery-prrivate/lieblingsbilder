@@ -178,7 +178,7 @@ async function fillTile(el) {
   const u = await thumbUrl(p);
   if (!el.isConnected) return;
   const w = el.querySelector('.wait');
-  if (u) { const img = new Image(); img.alt = ''; img.decoding = 'async'; img.src = u; if (w) el.replaceChild(img, w); else el.prepend(img); }
+  if (u) { const img = new Image(); img.alt = ''; img.decoding = 'async'; img.src = u; if (p.rot) img.style.transform = 'rotate(' + p.rot + 'deg)'; if (w) el.replaceChild(img, w); else el.prepend(img); }
   else if (w) w.textContent = p.th || p.have ? extOf(p.type).toUpperCase() : (session ? 'cloud' : 'not here');
 }
 const TOP = '\u0001';      // the "Top" view: only starred photos, still by month
@@ -238,7 +238,7 @@ function renderHome() {
     }
     const el = document.createElement('div'); el.className = 'tile' + (selected.has(p.id) ? ' sel' : ''); el.dataset.id = p.id;
     el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + '<button class="starbtn' + (p.star ? ' on' : '') + '" title="' + (p.star ? 'Remove the star' : 'Mark as top') + '" aria-label="Star">' + (p.star ? '★' : '☆') + '</button>';
-    if (thumbUrls.has(p.id)) { const img = new Image(); img.alt = ''; img.src = thumbUrls.get(p.id); el.replaceChild(img, el.firstChild); }
+    if (thumbUrls.has(p.id)) { const img = new Image(); img.alt = ''; img.src = thumbUrls.get(p.id); if (p.rot) img.style.transform = 'rotate(' + p.rot + 'deg)'; el.replaceChild(img, el.firstChild); }
     else if (io) io.observe(el); else fillTile(el);
     tileEvents(el, p);
     grid.appendChild(el);
@@ -286,6 +286,7 @@ function openFan(el, p) {
     '<div class="fannew" id="fanNewRow" hidden><input id="fanIn" type="text" placeholder="Folder name" maxlength="40" autocomplete="off" autocapitalize="sentences"><button id="fanSave" class="pill on">Save</button></div>' +
     '<div class="fanrow">' + (p.folder ? '<button id="fanNone" class="link">No folder</button>' : '') + '<button id="fanMore" class="link">Select several…</button></div>';
   fanFor = p; fan.hidden = false;
+  try { const sel = window.getSelection && window.getSelection(); if (sel) sel.removeAllRanges(); } catch (e) {}
   const r = el.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
   const w = Math.min(300, vw - 24); box.style.width = w + 'px';
   const left = Math.max(12, Math.min(r.left + r.width / 2 - w / 2, vw - w - 12));
@@ -319,6 +320,20 @@ async function fullBlob(p, msg) {
   if (typeof fetchFull !== 'function') throw new Error('not available');
   return fetchFull(p, msg);
 }
+// the file that leaves the app: the original, or, for a turned photo, a JPEG turned the same way
+// (a picture this browser cannot draw leaves as it is)
+async function outFile(p, msg) {
+  const blob = await fullBlob(p, msg);
+  if (!p.rot) return fileOf(p, blob);
+  let im; try { im = await decodeImage(blob); } catch (e) { return fileOf(p, blob); }
+  try {
+    const { w, h } = dims(im), q = p.rot % 180 !== 0, cv = document.createElement('canvas');
+    cv.width = q ? h : w; cv.height = q ? w : h;
+    const ctx = cv.getContext('2d'); ctx.translate(cv.width / 2, cv.height / 2); ctx.rotate(p.rot * Math.PI / 180); ctx.drawImage(im, -w / 2, -h / 2);
+    const out = await toJpeg(cv, 0.92), base = (p.name || dateStamp(p.taken_at)).replace(/\.[^.]+$/, '');
+    return new File([out], (base + '.jpg').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-'), { type: 'image/jpeg', lastModified: p.taken_at });
+  } catch (e) { return fileOf(p, blob); } finally { if (im.close) im.close(); }
+}
 const fileOf = (p, blob) => new File([blob], (p.name || (dateStamp(p.taken_at) + '.' + extOf(p.type))).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-'), { type: p.type, lastModified: p.taken_at });
 function downloadBlob(blob, name) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
@@ -344,7 +359,7 @@ async function selAction() {
   selBusy = true; busy(true); $('selShare').disabled = true;
   try {
     const files = []; let i = 0;
-    for (const p of list) { i++; files.push(fileOf(p, await fullBlob(p, list.length > 1 ? 'Fetching ' + i + ' of ' + list.length : ''))); }
+    for (const p of list) { i++; files.push(await outFile(p, list.length > 1 ? 'Fetching ' + i + ' of ' + list.length : '')); }
     if (await shareFiles(files, files.length === 1 ? files[0].name : files.length + ' photos')) setSelectMode(false);
   } catch (e) { toast('Could not prepare the photos: ' + errText(e)); }
   finally { selBusy = false; busy(false); renderHome(); }
@@ -401,7 +416,7 @@ async function renderView() {
   $('viewStar').innerHTML = '<span>' + (p.star ? '★' : '☆') + '</span>' + (p.star ? 'Top' : 'Star'); $('viewStar').classList.toggle('on', !!p.star);
   if (viewUrl) { URL.revokeObjectURL(viewUrl); viewUrl = ''; }
   const tu = await thumbUrl(p); if (my !== viewSeq) return;
-  if (tu) { img.src = tu; viewThumbUrl = tu; } else img.removeAttribute('src');
+  if (tu) { img.src = tu; viewThumbUrl = tu; fitView(); } else img.removeAttribute('src');
   msg.hidden = false; msg.textContent = p.have ? '' : haveKeyFor(p) ? 'Fetching the full picture…' : session ? 'The key of this folder is not on this device yet.' : 'Only the small picture is on this device. Sign in through the menu to fetch the full one.';
   if (!p.have && !haveKeyFor(p)) return;
   try {
@@ -410,7 +425,7 @@ async function renderView() {
     const test = new Image(); test.src = u;
     try { await test.decode(); } catch (e) { URL.revokeObjectURL(u); msg.textContent = 'This browser cannot display this kind of picture (' + extOf(p.type).toUpperCase() + '). Share or save it to open it elsewhere.'; return; }
     if (my !== viewSeq) { URL.revokeObjectURL(u); return; }
-    viewUrl = u; img.src = u; msg.hidden = true;
+    viewUrl = u; img.src = u; msg.hidden = true; fitView();
     renderHome();                                                   // the cloud mark on its tile
   } catch (e) { if (my === viewSeq) { msg.hidden = false; msg.textContent = errText(e); } }
 }
@@ -437,10 +452,24 @@ let viewSharing = false;
 $('viewShare').addEventListener('click', async () => {
   const p = curPhoto; if (!p || viewSharing) return;
   viewSharing = true; busy(true);
-  try { await shareFiles([fileOf(p, await fullBlob(p))], p.name || fmtDate(p.taken_at)); } catch (e) { toast('Could not share: ' + errText(e)); }
+  try { await shareFiles([await outFile(p)], p.name || fmtDate(p.taken_at)); } catch (e) { toast('Could not share: ' + errText(e)); }
   finally { viewSharing = false; busy(false); }
 });
 $('viewStar').addEventListener('click', () => { const p = curPhoto; if (!p) return; p.star = !p.star; save(); renderView(); renderHome(); toast(p.star ? 'Marked as top ★' : 'Star removed'); });
+// turned a quarter at a time; only the angle is stored (and synced), the picture stays as it is
+$('viewRot').addEventListener('click', () => { const p = curPhoto; if (!p) return; p.rot = ((p.rot || 0) + 90) % 360; save(); fitView(); renderHome(); });
+// the picture in the viewer, turned and fitted into the stage
+function fitView() {
+  const p = curPhoto, img = $('viewImg'); if (!p) return;
+  const r = p.rot || 0, st = $('viewStage').getBoundingClientRect();
+  const w = img.naturalWidth || p.w || 1, h = img.naturalHeight || p.h || 1, q = r % 180 !== 0;
+  const s = Math.min(st.width / (q ? h : w), st.height / (q ? w : h));
+  img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
+  img.style.width = Math.round(w * s) + 'px'; img.style.height = Math.round(h * s) + 'px';
+  img.style.transform = r ? 'rotate(' + r + 'deg)' : '';
+}
+$('viewImg').addEventListener('load', fitView);
+window.addEventListener('resize', () => { if (current() === 'view') fitView(); });
 $('viewDate').addEventListener('click', () => { if (curPhoto) dateSheet(curPhoto); });
 $('viewFolder').addEventListener('click', () => { if (curPhoto) folderSheet([curPhoto]); });
 $('viewDelete').addEventListener('click', () => { if (curPhoto) confirmDelete([curPhoto]); });
@@ -453,7 +482,7 @@ $('viewMore').addEventListener('click', () => {
     '<button id="saveLocal" class="btn">Save to this device</button>' +
     (!p.have && session ? '<button id="fetchFullBtn" class="btn">Keep the full picture on this device</button>' : ''), () => {
       if ($('capSave')) $('capSave').addEventListener('click', () => { p.caption = $('capIn').value.trim().slice(0, 200); save(); back(); toast('Caption saved'); });
-      $('saveLocal').addEventListener('click', async () => { try { const f = fileOf(p, await fullBlob(p)); downloadBlob(f, f.name); toast('Saved: ' + f.name); } catch (e) { toast(errText(e)); } back(); });
+      $('saveLocal').addEventListener('click', async () => { try { const f = await outFile(p); downloadBlob(f, f.name); toast('Saved: ' + f.name); } catch (e) { toast(errText(e)); } back(); });
       if ($('fetchFullBtn')) $('fetchFullBtn').addEventListener('click', async () => { back(); try { await fullBlob(p); toast('The full picture is on this device now.'); renderAll(); } catch (e) { toast(errText(e)); } });
     });
 });
@@ -484,7 +513,8 @@ async function makeCollage(k) {
       let im; try { im = await decodeImage(b); } catch (e) { continue; }
       try {
         const { w, h } = dims(im), s = Math.max(cell / w, cell / h), sw = cell / s, sh = cell / s;
-        ctx.drawImage(im, (w - sw) / 2, (h - sh) / 2, sw, sh, x, y, cell, cell);
+        ctx.save(); ctx.beginPath(); ctx.rect(x, y, cell, cell); ctx.clip(); ctx.translate(x + cell / 2, y + cell / 2); ctx.rotate((p.rot || 0) * Math.PI / 180);
+        ctx.drawImage(im, (w - sw) / 2, (h - sh) / 2, sw, sh, -cell / 2, -cell / 2, cell, cell); ctx.restore();
       } finally { if (im.close) im.close(); }
     }
     const blob = await toJpeg(cv, 0.9), name = (folderFilter === TOP ? 'Top collage ' : 'Collage ') + k + '.jpg', url = URL.createObjectURL(blob);
