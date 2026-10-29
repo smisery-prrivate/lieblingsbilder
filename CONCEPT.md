@@ -175,6 +175,9 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v10 (2026-10-29): "+ New folder" in the folder row and the menu; the folder tidy runs one pass at a
+  time (two at once had made an empty folder named after an id), and removes such folders and
+  duplicate folders of one name by itself.
 - v9 (2026-10-29): the shared rooms are gone (they were a misreading of "Räume"); folders are
   compartments with their own keys. Projects set up before v9 run `supabase-migration-v9.sql` once.
 - v8 (2026-10-29): picked pictures are read at once, before they wait in the queue (a picker's file

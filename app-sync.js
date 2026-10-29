@@ -572,19 +572,45 @@ function renderSyncBox() {
 // Installs from before v9 kept a folder as a name on each photo. Such a name becomes a folder of
 // its own (a new key) and the photo moves into it; a photo whose key is already wrapped by the
 // cloud key waits for that key (sign-in and the encryption password), the others move at once.
-async function migrateFolderNames() {
-  const legacy = photos.filter(p => p.folder && !folders.some(f => f.id === p.folder));
-  if (!legacy.length) return;
-  const u = session ? session.uid : account; let moved = 0;
-  for (const p of legacy) {
+// One pass at a time: two passes at once (the start and a sync) once took a photo whose folder was
+// already moved to the new id for an old folder name, and made a folder named after that id.
+let folderTidy = null;
+function migrateFolderNames() { if (!folderTidy) folderTidy = tidyFolders().finally(() => { folderTidy = null; }); return folderTidy; }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const idLike = s => UUID_RE.test(String(s || '')) || folders.some(f => f.id === s);
+async function tidyFolders() {
+  let changed = false;
+  // 1. an old folder name becomes a folder of its own (a new key) and the photo moves into it; a
+  //    photo whose key is wrapped by the cloud key waits for that key (sign-in and password). A
+  //    folder id this device does not know (yet) is never mistaken for a name.
+  for (const p of photos.filter(p => p.folder && !p.deleted)) {
+    if (folders.some(f => f.id === p.folder) || idLike(p.folder)) continue;      // checked again for every photo: the list may have moved meanwhile
     if (p.pk && !(session && Vault.hasCloudKey(session.uid))) continue;
     let f = folders.find(x => !x.deleted && x.name === p.folder);
     if (!f) { try { f = await newFolder(p.folder); } catch (e) { continue; } }
-    const name = p.folder; p.folder = '';
-    try { if (p.pk) { const raw = await Vault.unwrapItemKey(p.pk, 'lb|pk|' + p.id); p.folder = f.id; p.pk = await Vault.fwrapItemKey(f.id, raw, 'lb|pk|' + p.id); } else p.folder = f.id; moved++; }
+    if (folders.some(x => x.id === p.folder)) continue;
+    const name = p.folder;
+    try { if (p.pk) { const raw = await Vault.unwrapItemKey(p.pk, 'lb|pk|' + p.id); p.folder = f.id; p.pk = await Vault.fwrapItemKey(f.id, raw, 'lb|pk|' + p.id); } else p.folder = f.id; changed = true; }
     catch (e) { p.folder = name; }
   }
-  if (moved) save();
+  // 2. a folder named after an id (left by that old double pass) goes; photos in it move to the
+  //    folder the id names, or out of every folder
+  for (const f of folders.filter(f => !f.deleted && idLike(f.name))) {
+    const target = folders.find(x => x.id === f.name && !x.deleted);
+    let ok = true;
+    for (const p of photos.filter(p => !p.deleted && p.folder === f.id)) { try { await moveToFolder(p, target ? target.id : ''); } catch (e) { ok = false; } }
+    if (ok) { f.deleted = true; changed = true; if (folderFilter === f.id) folderFilter = target ? target.id : ''; }
+  }
+  // 3. two folders with one name: the older one stays (decided alike on every device), the photos of
+  //    the other move into it
+  const keep = new Map();
+  for (const f of folders.filter(f => !f.deleted).sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1))) {
+    const k = keep.get(f.name); if (!k) { keep.set(f.name, f); continue; }
+    let ok = true;
+    for (const p of photos.filter(p => !p.deleted && p.folder === f.id)) { try { await moveToFolder(p, k.id); } catch (e) { ok = false; } }
+    if (ok) { f.deleted = true; changed = true; if (folderFilter === f.id) folderFilter = k.id; }
+  }
+  if (changed) { save(); renderAll(); }
 }
 // ---------- folders: the compartments, in the cloud ----------
 // One row per folder: the name sealed with the folder's key, the key wrapped by the cloud key
@@ -640,6 +666,7 @@ async function syncFolders(u) {
   let moved = false;
   if (maxSeen > cursor) { cursors[ck] = maxSeen; moved = true; }
   for (const f of folders.slice()) {
+    if (f.deleted && !f.seen && !f.srv) { f.srv = f.updated_at; continue; }      // made and deleted here before it ever reached the cloud: nothing to tell
     if (!folderDue(f) || !Vault.hasFolderKey(f.id)) continue;
     let done = await writeFolder(f, u);
     if (!done) {                                                   // another device wrote first: take its row, then once more

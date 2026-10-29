@@ -185,7 +185,7 @@ const TOP = '\u0001';      // the "Top" view: only starred photos, still by mont
 const visible = () => alive().filter(p => !folderFilter || (folderFilter === TOP ? p.star : folderFilter === '\u0000' ? !p.folder : p.folder === folderFilter));
 function renderFolders() {
   const fl = liveFolders(), box = $('folders'), stars = alive().filter(p => p.star).length;
-  if (!fl.length && !stars) { box.hidden = true; if (folderFilter) folderFilter = ''; return; }
+  if (!fl.length && !alive().length) { box.hidden = true; if (folderFilter) folderFilter = ''; return; }
   if (folderFilter === TOP && !stars) folderFilter = '';
   if (folderFilter && folderFilter !== '\u0000' && folderFilter !== TOP && !folderById(folderFilter)) folderFilter = '';
   box.hidden = false; box.innerHTML = '';
@@ -194,6 +194,19 @@ function renderFolders() {
   if (stars) chip('★ Top ' + stars, TOP);
   for (const f of fl) chip(f.name || 'Folder', f.id);
   if (fl.length && alive().some(p => !p.folder)) chip('No folder', '\u0000');
+  const nb = document.createElement('button'); nb.className = 'pill new'; nb.textContent = '+ New folder'; nb.addEventListener('click', newFolderSheet); box.appendChild(nb);
+}
+// a new, empty folder; it opens at once, so the plus adds straight into it
+function newFolderSheet() {
+  openSheet(() => '<div class="grab"></div><h2>New folder</h2><p>A folder is a compartment with its own key. Make it, then tap the plus to add photos into it, or hold a photo to move it here.</p>' +
+    '<input id="nfIn" type="text" placeholder="Folder name, e.g. Familie" maxlength="40" autocomplete="off" autocapitalize="sentences"><button id="nfSave" class="btn primary">Make the folder</button>', () => {
+      setTimeout(() => { const i = $('nfIn'); if (i) i.focus(); }, 80);
+      $('nfSave').addEventListener('click', async () => {
+        const name = $('nfIn').value.trim().slice(0, 40); if (!name) { $('nfIn').focus(); return; }
+        try { const f = await newFolder(name); save(); back(); folderFilter = f.id; renderAll(); toast('"' + f.name + '" is open: tap the plus to add photos into it.'); } catch (e) { toast('Could not make the folder: ' + errText(e)); }
+      });
+      $('nfIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('nfSave').click(); });
+    });
 }
 function renderHome() {
   if (!photosLoaded) return;

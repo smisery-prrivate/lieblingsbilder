@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v9';
+const VERSION = 'v10';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -250,14 +250,21 @@ async function purgePhotoData(p) {
   p.have = false; p.th = false; dropThumbUrl(p.id);
 }
 // a folder is made here: a new key, kept on this device; its row goes to the cloud with the next sync
-async function newFolder(name) {
+// one name, one folder: a second call for a name that is being made waits for the first
+const folderMaking = new Map();
+function newFolder(name) {
   name = String(name).trim().slice(0, 40);
-  const same = folders.find(f => !f.deleted && f.name === name); if (same) return same;      // the same name again: the same folder
-  const id = uid(), now = Date.now();
-  await Vault.keepFolderKey(id, Vault.newFolderKey(), session ? session.uid : account);
-  const f = migrateFolder({ id, name: String(name).trim().slice(0, 40), created_at: now, updated_at: now, deleted: false, srv: 0, seen: 0 });
-  folders.push(f); fsnap[f.id] = fsigOf(f);
-  return f;
+  const same = folders.find(f => !f.deleted && f.name === name); if (same) return Promise.resolve(same);      // the same name again: the same folder
+  if (folderMaking.has(name)) return folderMaking.get(name);
+  const job = (async () => {
+    const id = uid(), now = Date.now();
+    await Vault.keepFolderKey(id, Vault.newFolderKey(), session ? session.uid : account);
+    const f = migrateFolder({ id, name, created_at: now, updated_at: now, deleted: false, srv: 0, seen: 0 });
+    folders.push(f); fsnap[f.id] = fsigOf(f);
+    return f;
+  })().finally(() => folderMaking.delete(name));
+  folderMaking.set(name, job);
+  return job;
 }
 
 // ---------- work queue (imports, downloads on demand) ----------

@@ -224,9 +224,10 @@ function renderLockBox() {
 function renderFolderBox() {
   const box = $('folderBox'); if (!box) return;
   const fl = liveFolders();
-  box.innerHTML = (fl.length ? '<div class="list">' + fl.map(f => '<button data-fid="' + esc(f.id) + '">' + esc(f.name || 'Folder') + ' <span class="hint" style="display:inline">· ' + alive().filter(p => p.folder === f.id).length + '</span></button>').join('') + '</div>' : '<p>No folders yet. Hold a photo to put it into one.</p>') +
+  box.innerHTML = (fl.length ? '<div class="list">' + fl.map(f => '<button data-fid="' + esc(f.id) + '">' + esc(f.name || 'Folder') + ' <span class="hint" style="display:inline">· ' + alive().filter(p => p.folder === f.id).length + '</span></button>').join('') + '</div>' : '<p>No folders yet.</p>') + '<button id="fbNew" class="btn">+ New folder</button>' +
     '<div class="hint">Every folder is a compartment with its own key: whoever gets hold of one folder\'s key has that folder, nothing else. Folder names never reach the server in the clear.</div>';
   for (const b of box.querySelectorAll('button[data-fid]')) b.addEventListener('click', () => { const f = folderById(b.dataset.fid); back(); if (f) setTimeout(() => folderManageSheet(f), 50); });
+  $('fbNew').addEventListener('click', () => { back(); setTimeout(newFolderSheet, 50); });
 }
 
 // this browser could not tie the key to the screen lock: say so at once, and offer the lock that does
