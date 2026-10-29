@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v8';
+const VERSION = 'v9';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -143,7 +143,7 @@ async function resealAll() {
         if (sr && sr.data) { const nb = await Vault.reseal(sr.data, aad); if (nb) await idb.cas('meta', id, c => c && sameIv(c.data, sr.data) ? { id, data: nb } : undefined); }
       }
       if (!(await Vault.resealCloudKey(session ? session.uid : ''))) break;
-      if (!(await Vault.resealRoomKeys(session ? session.uid : account))) break;
+      if (!(await Vault.resealFolderKeys(session ? session.uid : account))) break;
       let under = true;
       for (const [id, aad] of [['photos', 'lb|photos']].concat(SMALL)) { const r = await idb.get('meta', id); if (r && r.data && (await Vault.reseal(r.data, aad)) !== null) under = false; }
       if (!under) break;
@@ -166,8 +166,8 @@ async function resealAll() {
    EXIF date, else the file date), created_at (when it was added), folder, caption, star (one of
    the best: the "Top" view shows only these), deleted,
    updated_at (last change of the fields above: the entry the cloud holds is sealed with it),
-   room ('' = the person's own space, else the id of the shared room it lives in), uid (who added
-   it; '' = added here before any sign-in, which counts as mine).
+   folder ('' = no folder, else the id of the folder it lives in; a folder is a compartment with
+   its own key, and the entry and the per-photo key are sealed with it).
    On this device: have (the full image is stored here), th (the thumbnail is stored here).
    Cloud: tag (the name part of the uploaded files), pk (this photo's own key, wrapped by the cloud
    key), st ('sb': the files are in the Supabase bucket, 'gd': in the owner's Google Drive, then
@@ -175,38 +175,38 @@ async function resealAll() {
    srv (the updated_at the cloud entry carries; -1 = send ours again), seen (server stamp of the
    entry last seen), cloudPurged, owed (object names still to be removed). */
 let photos = [], snap = {}, foreignDirty = false, photosLoaded = false, cursors = {}, account = '';
-// rooms: the shared spaces this person is in: { id, name, token (invite token: members may invite), created_by, joined_at }
-let rooms = [], space = '';      // space: '' = own photos, else a room id (the screen that is open)
-try { space = localStorage.getItem('lb.space') || ''; } catch (e) {}
-const isMine = p => !p.uid || (session ? p.uid === session.uid : p.uid === account);
-const roomById = id => rooms.find(r => r.id === id);
-const spaceName = id => id ? ((roomById(id) || {}).name || 'Room') : 'My photos';
-const spaceList = () => [{ id: '', name: 'My photos' }].concat(rooms.map(r => ({ id: r.id, name: r.name || 'Room' })));
-const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '']);      // where the files live is part of the entry too
+// folders: the compartments: { id, name, created_at, updated_at, deleted, srv, seen }; the name is
+// sealed with the folder's key in the cloud, so the server never sees it
+let folders = [], fsnap = {};
+const folderById = id => folders.find(f => f.id === id && !f.deleted);
+const folderName = id => { const f = folderById(id); return f ? f.name : ''; };
+const liveFolders = () => folders.filter(f => !f.deleted).sort((a, b) => a.name.localeCompare(b.name));
+const fsigOf = f => JSON.stringify([f.name, !!f.deleted]);
+const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '', p.pk || '']);      // where the files live and the wrapped key are part of the entry too
 function migrate(p) {
   p.name = p.name == null ? '' : String(p.name); p.type = safeType(p.type); p.w = +p.w || 0; p.h = +p.h || 0; p.size = +p.size || 0;
   p.created_at = p.created_at || Date.now(); p.taken_at = p.taken_at || p.created_at; p.updated_at = p.updated_at || p.created_at;
   p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : ''; p.star = !!p.star;
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
-  p.room = p.room ? String(p.room) : ''; p.uid = p.uid ? String(p.uid) : '';
   p.st = p.st === 'gd' ? 'gd' : 'sb'; p.df = p.df ? String(p.df) : ''; p.dt = p.dt ? String(p.dt) : '';
   return p;
 }
-const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', rooms: Array.isArray(v.rooms) ? v.rooms : [] } : { photos: [], cursors: {}, account: '', rooms: [] };
+const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', folders: Array.isArray(v.folders) ? v.folders : [] } : { photos: [], cursors: {}, account: '', folders: [] };
+const migrateFolder = f => { f.name = f.name == null ? '' : String(f.name); f.created_at = f.created_at || Date.now(); f.updated_at = f.updated_at || f.created_at; f.srv = f.srv || 0; f.seen = f.seen || 0; f.deleted = !!f.deleted; return f; };
 async function loadPhotos() {
   const r = await idb.get('meta', 'photos'); let v = null;
   if (r) v = await Vault.openJson(r.data, 'lb|photos');
   const u = unpackList(v);
-  photos = u.photos.map(migrate); cursors = u.cursors; account = u.account; rooms = u.rooms; snap = {};
+  photos = u.photos.map(migrate); cursors = u.cursors; account = u.account; folders = u.folders.map(migrateFolder); snap = {}; fsnap = {};
   for (const p of photos) snap[p.id] = sigOf(p);
-  if (space && !roomById(space)) space = '';
+  for (const f of folders) fsnap[f.id] = fsigOf(f);
   photosLoaded = true;
 }
 async function mergeStored() {           // another tab wrote meanwhile: adopt what is newer there
   let stored; try { const r = await idb.get('meta', 'photos'); if (!r) return; stored = unpackList(await Vault.openJson(r.data, 'lb|photos')); } catch (e) { return; }
   for (const k in stored.cursors) cursors[k] = Math.max(cursors[k] || 0, stored.cursors[k] || 0);
   if (stored.account && !account) account = stored.account;
-  for (const r of stored.rooms) if (!roomById(r.id)) rooms.push(r);
+  for (const s of stored.folders) { migrateFolder(s); const f = folders.find(x => x.id === s.id); if (!f) { folders.push(s); fsnap[s.id] = fsigOf(s); } else if (s.updated_at > f.updated_at) { Object.assign(f, s); fsnap[s.id] = fsigOf(s); } }
   for (const s of stored.photos) {
     migrate(s); const p = photos.find(x => x.id === s.id);
     if (!p) { photos.push(s); snap[s.id] = sigOf(s); }
@@ -224,7 +224,7 @@ function persist() {
     persistQueued = false;
     if (passive) return false;
     if (foreignDirty) { foreignDirty = false; await mergeStored(); }
-    await idb.put('meta', { id: 'photos', data: await Vault.sealJson({ photos, cursors, account, rooms }, 'lb|photos') });
+    await idb.put('meta', { id: 'photos', data: await Vault.sealJson({ photos, cursors, account, folders }, 'lb|photos') });
     persistFailed = false;
     try { localStorage.setItem(TICK_KEY, Date.now() + '.' + Math.random()); } catch (e) {}
     return true;
@@ -236,7 +236,9 @@ const settledTombstone = p => !(p.owed && p.owed.length) && ((p.cloudPurged && p
 function save(opts) {
   const now = Date.now();
   for (const p of photos) { const s = sigOf(p); if (snap[p.id] !== s) { p.updated_at = Math.max(now, p.updated_at + 1); snap[p.id] = s; } }
+  for (const f of folders) { const s = fsigOf(f); if (fsnap[f.id] !== s) { f.updated_at = Math.max(now, f.updated_at + 1); fsnap[f.id] = s; } }
   photos = photos.filter(p => !(p.deleted && now - p.updated_at > 60 * 864e5 && settledTombstone(p)));
+  folders = folders.filter(f => !(f.deleted && now - f.updated_at > 60 * 864e5 && f.srv === f.updated_at));
   const stored = persist();
   if (!opts || opts.sync !== false) scheduleSync();
   return stored;
@@ -247,8 +249,16 @@ async function purgePhotoData(p) {
   await idb.del('images', p.id).catch(() => {}); await idb.del('thumbs', p.id).catch(() => {});
   p.have = false; p.th = false; dropThumbUrl(p.id);
 }
-const inSpace = () => alive().filter(p => p.room === space);
-const folderNames = () => [...new Set(inSpace().map(p => p.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+// a folder is made here: a new key, kept on this device; its row goes to the cloud with the next sync
+async function newFolder(name) {
+  name = String(name).trim().slice(0, 40);
+  const same = folders.find(f => !f.deleted && f.name === name); if (same) return same;      // the same name again: the same folder
+  const id = uid(), now = Date.now();
+  await Vault.keepFolderKey(id, Vault.newFolderKey(), session ? session.uid : account);
+  const f = migrateFolder({ id, name: String(name).trim().slice(0, 40), created_at: now, updated_at: now, deleted: false, srv: 0, seen: 0 });
+  folders.push(f); fsnap[f.id] = fsigOf(f);
+  return f;
+}
 
 // ---------- work queue (imports, downloads on demand) ----------
 let q = Promise.resolve(), qLen = 0, busyN = 0;
@@ -284,7 +294,7 @@ function leave(name) {
 }
 window.addEventListener('popstate', e => {
   const st = e.state; navPending = 0;
-  if (/[#&](access_token|error|error_code|join)=/.test(location.hash)) { linkOpened(); return; }
+  if (/[#&](access_token|error|error_code)=/.test(location.hash)) { linkOpened(); return; }
   if (locked && !lockTop()) { history.pushState(histState(), ''); drainNav(); return; }
   if (!st || st.b !== BOOT_ID) {
     if (stack.length > 1) { leave(stack.pop()); history.replaceState(histState(), ''); applyStack(); renderAll(); }

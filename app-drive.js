@@ -2,8 +2,7 @@
 /* Lieblingsbilder on Google Drive: optional, taken over from Snapdoc. Once the user has connected
    a Google account, the files of their own photos (the full picture and the thumbnail, both
    sealed with the photo's key, unreadable to Google) go into a folder "Lieblingsbilder" of that
-   account instead of the Supabase bucket. Rooms stay in the Supabase bucket, because a room's
-   files must be readable by every member and a Drive belongs to one person.
+   account instead of the Supabase bucket.
 
    The app asks Google only for the right to see and change files it created itself (scope
    drive.file). No Google script is loaded: the sign-in is a plain redirect to Google and back,
@@ -29,7 +28,7 @@ async function storeDrive() {
 const driveRedirect = () => location.origin + location.pathname.replace(/index\.html$/, '');
 const driveTokenOk = () => !!(drive && drive.token && drive.exp > Date.now() + 60000);
 // new own photos go to Drive once it is connected; while its hour has run out they wait for the tap
-const driveWanted = p => !!(DRIVE && drive && !p.room);
+const driveWanted = p => !!(DRIVE && drive);
 const drivePhotos = () => photos.filter(p => !p.deleted && p.st === 'gd');
 // Off to Google. silent: no screen, only works when the user is still signed in to Google in this browser.
 function driveConnect(silent) {
@@ -141,13 +140,13 @@ function renderDriveBox() {
   const box = $('driveBox'); if (!box) return;
   if (!DRIVE) { box.innerHTML = '<p>Google Drive is not set up in this version: your photos go to the Supabase cloud.</p>'; return; }
   if (!drive) {
-    box.innerHTML = '<p>Keep the files of your own photos in a folder "Lieblingsbilder" of your Google Drive (15 GB free) instead of the small Supabase cloud. They are encrypted before they leave the phone: Google holds only ciphertext. Rooms stay in the Supabase cloud. Every device that should show these photos connects the same Google account.</p>' +
+    box.innerHTML = '<p>Keep the files of your own photos in a folder "Lieblingsbilder" of your Google Drive (15 GB free) instead of the small Supabase cloud. They are encrypted before they leave the phone: Google holds only ciphertext. Every device that should show these photos connects the same Google account.</p>' +
       '<button id="driveOn" class="btn primary">Connect Google Drive</button>';
     $('driveOn').addEventListener('click', () => driveConnect(false));
     return;
   }
-  const n = drivePhotos().length, waiting = photos.filter(p => !p.deleted && p.have && !p.up && !p.room).length, err = driveState === 'error' || driveState === 'reconnect';
-  const left = photos.filter(p => !p.deleted && !p.room && isMine(p) && p.up && p.st !== 'gd').length;
+  const n = drivePhotos().length, waiting = photos.filter(p => !p.deleted && p.have && !p.up).length, err = driveState === 'error' || driveState === 'reconnect';
+  const left = photos.filter(p => !p.deleted && p.up && p.st !== 'gd').length;
   const line = driveState === 'reconnect' ? 'The connection has run out. Tap Reconnect to continue.' : driveState === 'error' ? driveMsg : n + (n === 1 ? ' photo' : ' photos') + ' in Drive' + (waiting ? ' · ' + waiting + ' waiting' : '');
   box.innerHTML = '<div class="statecard' + (err ? ' err' : '') + '"><div class="t">Google Drive · ' + esc(drive.email || '') + '</div><div class="s">Folder "' + esc(DRIVE.folder) + '" · ' + esc(line) + '</div></div>' +
     (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '<button id="driveNowBtn" class="btn">Sync now</button>') +

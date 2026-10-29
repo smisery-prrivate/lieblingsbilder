@@ -42,14 +42,13 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   the next start. The lock closes as soon as the app leaves the screen (the photo picker does not
   count as leaving); the delay can be lengthened in the menu. Whoever can open the phone sees the
   lock screen, not the photos.
-- **Rooms.** Shared spaces, as simple as a chat: everyone in a room adds pictures and sees all of
-  them, and only the person who added a picture can change or delete it. Own photos and the rooms
-  are a vertical stack of screens like Stillzeit's: arrow bars above and below name the neighbour,
-  a vertical swipe in the button area or on a bar moves one step (circular). The plus adds to the
-  space that is open; a picture from the share sheet asks which space it goes to when there are
-  rooms. A room is made in the menu (needs cloud sync) and shared with an invite link
-  (`#join=<room>.<token>.<key>`, like Stillzeit's family link); whoever opens it and signs in is
-  in. The invite link is the room's key: send it only to the people who belong in.
+- **Folders are compartments.** Every folder has its own key. A photo in a folder has its entry
+  and its small per-photo key sealed with that folder's key, so whoever gets hold of one folder's
+  key has that folder and nothing else; folder names never reach the server in the clear. For the
+  owner nothing of this shows: "All" shows everything, a long press moves a photo with one tap
+  (only its small key is rewrapped, the files stay), folders are renamed and deleted in the menu.
+  Protected folders (a folder key sealed by its own passphrase, never stored open on the device)
+  are the next step; the cloud rows already carry the fields for them.
 
 ## Encryption, and what a compromise of one part gives away
 
@@ -62,7 +61,7 @@ renamed so that both apps can live on one origin. The parts are kept apart on pu
 | **Cloud account** (Supabase sign-in) | ciphertext files and sealed entries | nothing readable; a deleted or swapped entry is noticed (sealed with its change time and delete flag) |
 | **Cloud key** (wrapped by the encryption password, which never leaves the device) | the per-photo keys inside the entries | the collection, but only together with the password or an unlocked device |
 | **Per-photo key** (random, carried wrapped in the photo's entry) | that photo's full picture and thumbnail, through two derived keys | one photo; thumbnail keys open no full pictures |
-| **Room key** (random, held by the members; in the invite link's fragment, which never reaches the server; in the cloud only wrapped by each member's cloud key) | that room's entries and per-photo keys | that room, nothing of anyone's own photos or other rooms |
+| **Folder key** (random, one per folder; on the device sealed by the local key, in the cloud sealed by the cloud key, for a protected folder by its own passphrase) | that folder's entries and per-photo keys | that folder, no other folder, nothing outside folders |
 | **Server** | ciphertext, sizes, stamps | cannot read, forge or swap: files carry the photo id, tag and kind inside the encryption |
 
 Honest limits, the same as in Snapdoc: a web page cannot scrub browser storage files, which is why
@@ -88,7 +87,7 @@ restarts the page so no decrypted picture stays in memory.
 | `app-core.js` | Helpers, the write guard, encrypted storage, the photo list, screens, back button |
 | `app-photos.js` | Adding pictures, the date from the picture, thumbnails, home, viewer, folders, collage |
 | `app-lock.js` | Lock screen, the menu and the small sheets |
-| `app-sync.js` | Sign-in, encryption password, sync loop, downloads on demand, rooms |
+| `app-sync.js` | Sign-in, encryption password, sync loop, downloads on demand, folders |
 | `app-drive.js` | Google Drive: the connection and the files of own photos |
 | `app-boot.js` | One active window, start-up order, updates, housekeeping |
 | `sw.js` | Offline shell (one complete release) and the share-sheet receiver |
@@ -107,13 +106,13 @@ restarts the page so no decrypted picture stays in memory.
   on one device while another keeps the photo with a later change sends the picture up again under
   a fresh tag and key. Objects nothing refers to are removed, or remembered and removed later.
 - A refused upload is tried again after a growing pause (1 min, 4 min, … up to an hour).
-- Rooms: `lb_rooms` holds a sealed name and invite token and the token's hash; `lb_room_members`
-  holds who is in and each member's wrapped copy of the room key. Joining goes through the
-  function `lb_join_room`, which checks the token's hash before adding the member. Every photo
-  entry carries `room_id`; members read a room's entries and objects (`room/<room id>/…`), only
-  the uploader writes or deletes them. Each space has its own pull bookmark, so a room joined
-  later is read from its beginning. Whoever adds a picture to a room is named inside the sealed
-  entry by the part of their e-mail before the @.
+- Folders: `lb_folders` holds, per folder, the name sealed with the folder key and the folder key
+  wrapped by the cloud key (`wrap`; `pwrap`, `psalt`, `piter` are for protected folders). Rows are
+  written and read like photo entries, conditionally on the server stamp, the later change wins.
+  Every photo entry carries `folder_id` in the clear (ids are random), so a device knows which
+  key opens it; each folder has its own pull bookmark. Moving a photo rewraps its small key under
+  the new folder's key and reseals the entry; the files are untouched. Deleting a folder moves its
+  photos out first; the folder row becomes a marker.
 
 ## Google Drive as the file store (since v4)
 
@@ -124,8 +123,7 @@ the files of the owner's **own** photos go into a folder "Lieblingsbilder" of th
 exactly as before: Google holds ciphertext, two files per photo, named `<photo id>.<tag>` and
 `….t`, each tagged with the photo id. The entry in Supabase says where the files are (`st`,
 `df`, `dt`), so every device of the same person fetches them from Drive, with its own connection
-to the same Google account. **Rooms stay in the Supabase bucket**: a room's files must be
-readable by every member, and a Drive belongs to one person. Deleting a photo moves its Drive
+to the same Google account. Deleting a photo moves its Drive
 files to the bin. When the hour is over, own photos wait for a tap on Reconnect (the status line
 says so); without a lock the app reconnects by itself at a quiet moment, like Snapdoc. Own photos
 that were uploaded to the Supabase bucket before Drive was connected move over on request
@@ -161,7 +159,7 @@ The app keeps only thumbnails on a second device by default, fetches full pictur
 never decrypts more than it shows, so the list itself scales. The cloud bucket is the limit:
 thousands of photos a year at 2–5 MB each is several GB a year.
 
-- **Supabase Storage**: 1 GB free; Pro is about USD 25 a month for 100 GB. Holds the rooms.
+- **Supabase Storage**: 1 GB free; Pro is about USD 25 a month for 100 GB.
 - **Google Drive as the file store** (built in v4, see above): the owner's own photos, encrypted;
   15 GB free, 100 GB for about EUR 2 a month.
 - **Proton Drive**: no interface for third-party web apps (no OAuth, no public API); a static web
@@ -177,12 +175,14 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v9 (2026-10-29): the shared rooms are gone (they were a misreading of "Räume"); folders are
+  compartments with their own keys. Projects set up before v9 run `supabase-migration-v9.sql` once.
 - v8 (2026-10-29): picked pictures are read at once, before they wait in the queue (a picker's file
   can stop being readable meanwhile); a picture that cannot be stored says why.
 - v7 (2026-10-28): own photos move from the Supabase bucket to Drive on request.
 - v6 (2026-10-28): the folders fan out under the pressed tile instead of a sheet from below.
 - v5 (2026-10-28): the long press survives the small moves of a finger (it did nothing on a phone).
-- v4 (2026-10-27): Google Drive as the file store for own photos (rooms stay in Supabase); a long
+- v4 (2026-10-27): Google Drive as the file store for own photos ; a long
   press on a tile opens the folders for that photo.
 - v3 (2026-10-27): the star right from the grid (star corner on each tile); a double tap on the
   picture in the viewer opens the folder menu.
@@ -190,4 +190,4 @@ into the `ASSETS` list in `sw.js`.
 - v1 (2026-10-26): first release, tested against a stand-in cloud with two browsers (import,
   EXIF dates and orientation, folders, lock, sign-in, upload, second device, delete across devices,
   share sheet, collage) and with two accounts (rooms: create, invite link, join before and after
-  sign-in, pictures from both sides, no delete of the other's pictures, leave).
+  sign-in, pictures from both sides, no delete of the other's pictures, leave; gone again in v9).

@@ -318,40 +318,42 @@ const Vault = (() => {
     await keepCloudKey(raw, uid);
   }
   const rewrapEnvelope = (password, uid) => wrapEnvelope(need(CKraw), password, uid);
-  // ---------- room keys: one random key per shared room, held by its members ----------
-  // Kept on the device sealed by the local key (like the cloud key) and in the cloud sealed by this
-  // member's cloud key, so a second device of the same person finds its rooms again. The invite
-  // link carries the key in its fragment; the server never sees it.
-  const rooms = new Map();                                    // room id -> { raw, key }
-  const roomLocalAad = (uid, id) => 'lb|room|local|' + uid + '|' + id;
-  async function keepRoomKey(id, raw, uid) {
-    const r = { raw: new Uint8Array(raw), key: await importAes(raw) }; rooms.set(id, r);
-    await kv.put({ id: 'room|' + id, box: await sealWith(need(LK), r.raw, roomLocalAad(uid, id)) });
+  // ---------- folder keys: one random key per folder, the compartments ----------
+  // A folder is a compartment: its photos' entries and per-photo keys are sealed with the folder's
+  // own key, so a key that leaks opens one folder. Kept on the device sealed by the local key (like
+  // the cloud key) and in the cloud sealed by the cloud key, so a second device finds its folders
+  // again. (A protected folder's key is sealed by its own passphrase instead and never stored
+  // open on the device: see the concept.)
+  const folders = new Map();                                  // folder id -> { raw, key }
+  const folderLocalAad = id => 'lb|fk|local|' + id;      // the local copy is bound to the device key, not to an account: folders are made before any sign-in too
+  async function keepFolderKey(id, raw, uid) {
+    const r = { raw: new Uint8Array(raw), key: await importAes(raw) }; folders.set(id, r);
+    await kv.put({ id: 'fk|' + id, box: await sealWith(need(LK), r.raw, folderLocalAad(id)) });
   }
-  async function loadRoomKeys(uid) {
-    rooms.clear(); if (!kv.keys) return;
+  async function loadFolderKeys(uid) {
+    folders.clear(); if (!kv.keys) return;
     for (const k of await kv.keys()) {
-      if (typeof k !== 'string' || !k.startsWith('room|')) continue;
-      const id = k.slice(5); let raw;
-      try { raw = new Uint8Array(await openLocal((await kv.get(k)).box, roomLocalAad(uid, id))); } catch (e) { continue; }
-      rooms.set(id, { raw, key: await importAes(raw) });
+      if (typeof k !== 'string' || !k.startsWith('fk|')) continue;
+      const id = k.slice(3); let raw;
+      try { raw = new Uint8Array(await openLocal((await kv.get(k)).box, folderLocalAad(id))); } catch (e) { continue; }
+      folders.set(id, { raw, key: await importAes(raw) });
     }
   }
-  async function dropRoomKey(id) { rooms.delete(id); if (kv) await kv.del('room|' + id); }
-  async function resealRoomKeys(uid) {
+  async function dropFolderKey(id) { folders.delete(id); if (kv) await kv.del('fk|' + id); }
+  async function resealFolderKeys(uid) {
     if (!kv.keys) return true;
     for (const k of await kv.keys()) {
-      if (typeof k !== 'string' || !k.startsWith('room|')) continue;
+      if (typeof k !== 'string' || !k.startsWith('fk|')) continue;
       const r = await kv.get(k); if (!r) continue;
-      const nb = await reseal(r.box, roomLocalAad(uid, k.slice(5))).catch(() => null); if (nb) await kv.put({ id: k, box: nb });
-      const back = await kv.get(k); if (back && (await reseal(back.box, roomLocalAad(uid, k.slice(5))).catch(() => true)) !== null) return false;
+      const nb = await reseal(r.box, folderLocalAad(k.slice(3))).catch(() => null); if (nb) await kv.put({ id: k, box: nb });
+      const back = await kv.get(k); if (back && (await reseal(back.box, folderLocalAad(k.slice(3))).catch(() => true)) !== null) return false;
     }
     return true;
   }
-  const roomKey = id => { const r = rooms.get(id); if (!r) throw new Error('The key of this room is not on this device.'); return r; };
-  // wrapped for the cloud: this member's copy, under the cloud key
-  const wrapRoomKey = (id, uid) => (async () => b64(await sealWith(need(CK), roomKey(id).raw, 'lb|room|ck|' + uid + '|' + id)))();
-  const unwrapRoomKey = async (s, uid, id) => new Uint8Array(await openWith(need(CK), unb64(s), 'lb|room|ck|' + uid + '|' + id));
+  const folderKey = id => { const r = folders.get(id); if (!r) throw new Error('The key of this folder is not on this device.'); return r; };
+  // wrapped for the cloud, under the cloud key
+  const wrapFolderKey = (id, uid) => (async () => b64(await sealWith(need(CK), folderKey(id).raw, 'lb|fk|ck|' + uid + '|' + id)))();
+  const unwrapFolderKey = async (s, uid, id) => new Uint8Array(await openWith(need(CK), unb64(s), 'lb|fk|ck|' + uid + '|' + id));
 
   // ---------- per-item keys: one random key per photo, wrapped by the cloud key ----------
   // Compartments: a key that leaks opens one photo, not the collection, and from each item key
@@ -385,12 +387,12 @@ const Vault = (() => {
     sealJson: (obj, aad) => sealWith(need(LK), te.encode(JSON.stringify(obj)), aad),
     openJson: async (buf, aad) => JSON.parse(td.decode(await openLocal(buf, aad))),
     hasCloudKey: uid => !!CK && ckUid === uid, loadCloudKey, newItemKey, wrapItemKey, unwrapItemKey, sealItem, openItem,
-    newRoomKey: () => rand(32), keepRoomKey, loadRoomKeys, dropRoomKey, resealRoomKeys, hasRoomKey: id => rooms.has(id), roomKeyB64: id => b64(roomKey(id).raw), unb64,
-    wrapRoomKey, unwrapRoomKey,
-    rsealJson: async (id, obj, aad) => b64(await sealWith(roomKey(id).key, te.encode(JSON.stringify(obj)), aad)),
-    ropenJson: async (id, s, aad) => JSON.parse(td.decode(await openWith(roomKey(id).key, unb64(s), aad))),
-    rwrapItemKey: async (id, raw, aad) => b64(await sealWith(roomKey(id).key, raw, aad)),
-    runwrapItemKey: async (id, s, aad) => new Uint8Array(await openWith(roomKey(id).key, unb64(s), aad)), newEnvelope, openEnvelope, rewrapEnvelope, dropCloudKey,
+    newFolderKey: () => rand(32), keepFolderKey, loadFolderKeys, dropFolderKey, resealFolderKeys, hasFolderKey: id => folders.has(id), unb64,
+    wrapFolderKey, unwrapFolderKey,
+    fsealJson: async (id, obj, aad) => b64(await sealWith(folderKey(id).key, te.encode(JSON.stringify(obj)), aad)),
+    fopenJson: async (id, s, aad) => JSON.parse(td.decode(await openWith(folderKey(id).key, unb64(s), aad))),
+    fwrapItemKey: async (id, raw, aad) => b64(await sealWith(folderKey(id).key, raw, aad)),
+    funwrapItemKey: async (id, s, aad) => new Uint8Array(await openWith(folderKey(id).key, unb64(s), aad)), newEnvelope, openEnvelope, rewrapEnvelope, dropCloudKey,
     cseal: (data, aad) => sealWith(need(CK), data, aad), copen: (buf, aad) => openWith(need(CK), buf, aad),
     csealJson: async (obj, aad) => b64(await sealWith(need(CK), te.encode(JSON.stringify(obj)), aad)),
     copenJson: async (s, aad) => JSON.parse(td.decode(await openWith(need(CK), unb64(s), aad)))

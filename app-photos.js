@@ -101,12 +101,11 @@ $('importInput').addEventListener('change', e => {
 const isImage = f => /^image\//i.test(f.type) || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '');
 // Every picture is stored as it is (the original bytes, nothing re-encoded), with a thumbnail and
 // the date it was taken. One picture that fails does not hold up the others.
-function addFiles(all, source, target) {
+function addFiles(all, source) {
   const files = all.filter(isImage);
   if (all.length && !files.length) { toast(all.length === 1 ? 'That file is not a picture.' : 'None of those files is a picture.'); return; }
   if (!files.length || passive || !Vault.isOpen()) return;      // under a soft lock the vault is still open: pictures from the picker are stored, then the page restarts
-  if (target == null) target = space;
-  if (target && !roomById(target)) target = '';
+  const intoFolder = folderFilter && folderById(folderFilter) ? folderFilter : '';      // added while a folder is open: it goes in there
   const res = { n: 0, dated: 0, undated: 0, big: 0, undecoded: 0, failed: 0, why: '' };
   // The bytes are read right now, all at once: a file handed over by the picker can stop being
   // readable while it waits behind others (Android, pictures a cloud gallery fetches on demand).
@@ -123,8 +122,7 @@ function addFiles(all, source, target) {
       if (t) await thumbPut(id, t.blob);
       const now = Date.now();
       const p = migrate({ id, name: f.name || '', type: safeType(f.type) === 'application/octet-stream' ? guessType(f.name) : safeType(f.type), w: t ? t.w : 0, h: t ? t.h : 0, size: f.size,
-        taken_at: taken, created_at: now, updated_at: now, folder: target === space && folderFilter && folderFilter !== '\u0000' ? folderFilter : '', caption: '', deleted: false, have: true, th: !!t, up: false, tag: '', srv: 0, seen: 0,
-        room: target, uid: session ? session.uid : account });
+        taken_at: taken, created_at: now, updated_at: now, folder: intoFolder, caption: '', deleted: false, have: true, th: !!t, up: false, tag: '', srv: 0, seen: 0 });
       photos.unshift(p); snap[p.id] = sigOf(p);
       res.n++; if (ex.taken) res.dated++; else res.undated++; if (!t) res.undecoded++;
       save(); renderHome();
@@ -137,8 +135,8 @@ function addFiles(all, source, target) {
     if (res.undecoded) parts.push(res.undecoded === 1 ? '1 cannot be displayed by this browser; it is stored as it is' : res.undecoded + ' cannot be displayed by this browser; they are stored as they are');
     if (res.big) parts.push(res.big === 1 ? '1 file is larger than 50 MB and was skipped' : res.big + ' files are larger than 50 MB and were skipped');
     if (res.failed) parts.push((res.failed === 1 ? '1 could not be stored' : res.failed + ' could not be stored') + (res.why ? ': ' + res.why : ''));
-    if (parts.length) toast((target !== space && res.n ? 'In ' + spaceName(target) + ': ' : '') + parts.join(' · ') + '.');
-    if (source === 'shared' && res.n && current() === 'home') { if (target !== space) setSpace(target); const first = photos.find(p => !p.deleted && p.room === target); if (first) scrollToMonth(monthKey(first.taken_at)); }
+    if (parts.length) toast(parts.join(' · ') + '.');
+    if (source === 'shared' && res.n && current() === 'home') { const first = photos.find(p => !p.deleted); if (first) scrollToMonth(monthKey(first.taken_at)); }
   });
 }
 const guessType = name => ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif' })[(String(name || '').split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
@@ -150,18 +148,8 @@ async function takeShared() {
   if (!recs.length) return;
   const files = [];
   for (const r of recs) { try { if (r && r.blob && r.blob.size) files.push(new File([r.blob], r.name || ('shared-' + dateStamp(r.lastModified) + '.' + extOf(guessType(r.name) !== 'application/octet-stream' ? guessType(r.name) : r.blob.type)), { type: r.blob.type || guessType(r.name), lastModified: r.lastModified || Date.now() })); } catch (e) {} }
-  const clear = () => queue(async () => { for (const r of recs) await idb.del('shared', r.id).catch(() => {}); });
-  if (!rooms.length) { addFiles(files, 'shared'); clear(); return; }
-  spaceSheet(files.length, target => { addFiles(files, 'shared', target); clear(); });
-}
-// "Add 3 photos to …": one tap on a space, like picking a chat
-function spaceSheet(n, pick) {
-  if (locked || passive) { pick(space); return; }
-  openSheet(() => '<div class="grab"></div><h2>Add ' + n + (n === 1 ? ' photo' : ' photos') + ' to</h2><div class="list">' +
-    spaceList().map(s => '<button class="btn' + (s.id === space ? ' primary' : '') + '" data-s="' + esc(s.id) + '">' + esc(s.name) + '</button>').join('') + '</div>',
-    () => { for (const b of $('panel').querySelectorAll('button[data-s]')) b.addEventListener('click', () => { const t = b.dataset.s; back(); pick(t); }); },
-    () => { if (!picked) pick(space); });
-  let picked = false; const orig = pick; pick = t => { picked = true; orig(t); };
+  addFiles(files, 'shared');
+  queue(async () => { for (const r of recs) await idb.del('shared', r.id).catch(() => {}); });
 }
 
 // ---------- home: folders, months, tiles ----------
@@ -194,33 +182,33 @@ async function fillTile(el) {
   else if (w) w.textContent = p.th || p.have ? extOf(p.type).toUpperCase() : (session ? 'cloud' : 'not here');
 }
 const TOP = '\u0001';      // the "Top" view: only starred photos, still by month
-const visible = () => inSpace().filter(p => !folderFilter || (folderFilter === TOP ? p.star : folderFilter === '\u0000' ? !p.folder : p.folder === folderFilter));
+const visible = () => alive().filter(p => !folderFilter || (folderFilter === TOP ? p.star : folderFilter === '\u0000' ? !p.folder : p.folder === folderFilter));
 function renderFolders() {
-  const names = folderNames(), box = $('folders'), stars = inSpace().filter(p => p.star).length;
-  if (!names.length && !stars) { box.hidden = true; if (folderFilter) folderFilter = ''; return; }
+  const fl = liveFolders(), box = $('folders'), stars = alive().filter(p => p.star).length;
+  if (!fl.length && !stars) { box.hidden = true; if (folderFilter) folderFilter = ''; return; }
   if (folderFilter === TOP && !stars) folderFilter = '';
-  if (folderFilter && folderFilter !== '\u0000' && folderFilter !== TOP && !names.includes(folderFilter)) folderFilter = '';
+  if (folderFilter && folderFilter !== '\u0000' && folderFilter !== TOP && !folderById(folderFilter)) folderFilter = '';
   box.hidden = false; box.innerHTML = '';
   const chip = (label, val) => { const b = document.createElement('button'); b.className = 'pill' + (folderFilter === val ? ' on' : '') + (val === TOP ? ' top' : ''); b.textContent = label; b.addEventListener('click', () => { folderFilter = val; renderHome(); }); box.appendChild(b); };
   chip('All', '');
   if (stars) chip('★ Top ' + stars, TOP);
-  for (const n of names) chip(n, n);
-  if (names.length && inSpace().some(p => !p.folder)) chip('No folder', '\u0000');
+  for (const f of fl) chip(f.name || 'Folder', f.id);
+  if (fl.length && alive().some(p => !p.folder)) chip('No folder', '\u0000');
 }
 function renderHome() {
   if (!photosLoaded) return;
-  renderSpaceNav(); renderFolders();
+  renderFolders();
   const list = $('list'), items = visible();
   $('selectBtn').hidden = !items.length; $('selectBtn').textContent = selectMode ? 'Done' : 'Select'; $('selectBtn').classList.toggle('on', selectMode);
   $('selDock').hidden = !selectMode; $('addDock').hidden = selectMode;
-  const own = [...selected].every(id => { const p = byId(id); return p && isMine(p); }), allStar = selected.size > 0 && [...selected].every(id => { const p = byId(id); return p && p.star; });
+  const own = true, allStar = selected.size > 0 && [...selected].every(id => { const p = byId(id); return p && p.star; });
   $('selShare').disabled = !selected.size; $('selFolder').disabled = !selected.size || !own; $('selDelete').disabled = !selected.size || !own; $('selStar').disabled = !selected.size || !own;
   $('selStar').textContent = allStar ? '☆' : '★'; $('selStar').title = allStar ? 'Remove the star' : 'Mark as top';
   $('selShare').textContent = selected.size ? 'Share ' + selected.size : 'Share';
   list.classList.toggle('selmode', selectMode);
   if (!items.length) {
-    list.innerHTML = '<div class="empty"><b>' + (folderFilter === TOP ? 'No top photos yet' : folderFilter ? 'Nothing in this folder yet' : space ? 'Nothing in this room yet' : 'No photos yet') + '</b>' +
-      (folderFilter === TOP ? 'Open a photo and tap the star: the best of the best collect here, by month.' : folderFilter ? 'Open a photo and give it this folder, or add new ones with the plus.' : space ? 'Tap the plus to add pictures here. Everyone in the room sees them.' : 'Tap the plus and pick your favourite pictures from the gallery. Or share a picture from any app to Lieblingsbilder.') +
+    list.innerHTML = '<div class="empty"><b>' + (folderFilter === TOP ? 'No top photos yet' : folderFilter ? 'Nothing in this folder yet' : 'No photos yet') + '</b>' +
+      (folderFilter === TOP ? 'Open a photo and tap the star: the best of the best collect here, by month.' : folderFilter ? 'Open a photo and give it this folder, or add new ones with the plus.' : 'Tap the plus and pick your favourite pictures from the gallery. Or share a picture from any app to Lieblingsbilder.') +
       (SYNC && !session ? '<br><br>Everything is encrypted on this device. Sign in through the menu to keep an encrypted copy in your own cloud and see the same photos on another device.' : '') + '</div>';
     return;
   }
@@ -236,8 +224,7 @@ function renderHome() {
       grid = sec.querySelector('.grid'); frag.appendChild(sec);
     }
     const el = document.createElement('div'); el.className = 'tile' + (selected.has(p.id) ? ' sel' : ''); el.dataset.id = p.id;
-    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + (p.room && !isMine(p) && p.by ? '<span class="who">' + esc(p.by) + '</span>' : '') +
-      (isMine(p) ? '<button class="starbtn' + (p.star ? ' on' : '') + '" title="' + (p.star ? 'Remove the star' : 'Mark as top') + '" aria-label="Star">' + (p.star ? '★' : '☆') + '</button>' : (p.star ? '<span class="st">★</span>' : ''));
+    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + '<button class="starbtn' + (p.star ? ' on' : '') + '" title="' + (p.star ? 'Remove the star' : 'Mark as top') + '" aria-label="Star">' + (p.star ? '★' : '☆') + '</button>';
     if (thumbUrls.has(p.id)) { const img = new Image(); img.alt = ''; img.src = thumbUrls.get(p.id); el.replaceChild(img, el.firstChild); }
     else if (io) io.observe(el); else fillTile(el);
     tileEvents(el, p);
@@ -248,7 +235,7 @@ function renderHome() {
 // tap opens (or picks, in select mode); a long press starts picking
 let pressTimer = null, pressed = false;
 // a tap on the star corner marks the photo as top (or takes the star away) without opening it
-function setStar(p, on) { if (!isMine(p) || p.star === on) return; p.star = on; save(); renderHome(); if (curPhoto === p) renderView(); }
+function setStar(p, on) { if (p.star === on) return; p.star = on; save(); renderHome(); if (curPhoto === p) renderView(); }
 function tileEvents(el, p) {
   const sb = el.querySelector('.starbtn');
   if (sb) sb.addEventListener('click', e => { e.stopPropagation(); clearTimeout(pressTimer); pressed = false; setStar(p, !p.star); });
@@ -262,7 +249,7 @@ function tileEvents(el, p) {
     pressTimer = setTimeout(() => {
       pressTimer = null; pressed = true; setTimeout(() => { pressed = false; }, 600);      // the click that follows the press is swallowed
       if (navigator.vibrate) navigator.vibrate(20);
-      if (selectMode) toggleSel(p.id); else if (isMine(p)) openFan(el, p); else { setSelectMode(true); toggleSel(p.id); }
+      if (selectMode) toggleSel(p.id); else openFan(el, p);
     }, 450);
   });
   // pointercancel is NOT the end of a press: browsers fire it when they take the gesture (the image
@@ -280,8 +267,8 @@ $('list').addEventListener('scroll', () => { clearTimeout(pressTimer); pressTime
 let fanFor = null;
 function openFan(el, p) {
   if (fanFor || locked || passive) return;
-  const fan = $('fan'), box = $('fanBox'), names = folderNames();
-  box.innerHTML = '<div class="fanchips">' + names.map(n => '<button class="pill' + (n === p.folder ? ' on' : '') + '" data-f="' + esc(n) + '">' + esc(n) + '</button>').join('') +
+  const fan = $('fan'), box = $('fanBox'), fl = liveFolders();
+  box.innerHTML = '<div class="fanchips">' + fl.map(f => '<button class="pill' + (f.id === p.folder ? ' on' : '') + '" data-f="' + esc(f.id) + '">' + esc(f.name || 'Folder') + '</button>').join('') +
     '<button class="pill new" id="fanNew">+ New folder</button></div>' +
     '<div class="fannew" id="fanNewRow" hidden><input id="fanIn" type="text" placeholder="Folder name" maxlength="40" autocomplete="off" autocapitalize="sentences"><button id="fanSave" class="pill on">Save</button></div>' +
     '<div class="fanrow">' + (p.folder ? '<button id="fanNone" class="link">No folder</button>' : '') + '<button id="fanMore" class="link">Select several…</button></div>';
@@ -293,10 +280,10 @@ function openFan(el, p) {
   box.style.left = left + 'px'; box.style.top = (below ? r.bottom + 8 : Math.max(8, r.top - 8 - h)) + 'px';
   box.classList.toggle('up', !below);
   box.style.setProperty('--arrow', Math.max(14, Math.min(w - 14, r.left + r.width / 2 - left)) + 'px');
-  const apply = f => { p.folder = f; save(); renderAll(); back(); toast(f ? 'Moved to ' + f : 'Folder removed'); };
+  const apply = fid => movePhotos([p], fid).then(() => { back(); }).catch(e => toast('Could not move: ' + errText(e)));
   for (const b of box.querySelectorAll('button[data-f]')) b.addEventListener('click', () => apply(b.dataset.f));
   $('fanNew').addEventListener('click', () => { $('fanNewRow').hidden = false; $('fanNew').hidden = true; setTimeout(() => { const i = $('fanIn'); if (i) i.focus(); }, 50); });      // the fan may be gone again by then
-  $('fanSave').addEventListener('click', () => { const f = $('fanIn').value.trim().slice(0, 40); if (f) apply(f); else $('fanIn').focus(); });
+  $('fanSave').addEventListener('click', async () => { const name = $('fanIn').value.trim().slice(0, 40); if (!name) { $('fanIn').focus(); return; } try { apply((await newFolder(name)).id); } catch (e) { toast('Could not make the folder: ' + errText(e)); } });
   $('fanIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('fanSave').click(); });
   if ($('fanNone')) $('fanNone').addEventListener('click', () => apply(''));
   $('fanMore').addEventListener('click', () => { back(); setTimeout(() => { setSelectMode(true); if (!selected.has(p.id)) toggleSel(p.id); }, 50); });
@@ -315,7 +302,7 @@ function scrollToMonth(k) { const el = $('list').querySelector('.month[data-mont
 let selBusy = false;
 async function fullBlob(p, msg) {
   if (p.have) { const b = await imgGet(p.id, p.type); if (b) return b; p.have = false; persist(); }
-  if (!haveKeyFor(p)) throw new Error(session ? (p.room ? 'The key for this room is not on this device yet.' : 'The encryption password is needed first (menu).') : 'This photo is only in the cloud. Sign in through the menu to fetch it.');
+  if (!haveKeyFor(p)) throw new Error(session ? (p.folder ? 'The key of this folder is not on this device yet.' : 'The encryption password is needed first (menu).') : 'This photo is only in the cloud. Sign in through the menu to fetch it.');
   if (typeof fetchFull !== 'function') throw new Error('not available');
   return fetchFull(p, msg);
 }
@@ -350,30 +337,38 @@ async function selAction() {
   finally { selBusy = false; busy(false); renderHome(); }
 }
 $('selShare').addEventListener('click', selAction);
-$('selStar').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted && isMine(p)); if (!list.length) return; const on = !list.every(p => p.star); for (const p of list) p.star = on; save(); renderAll(); toast(on ? (list.length === 1 ? 'Marked as top' : list.length + ' marked as top') : 'Star removed'); });
-$('selFolder').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted && isMine(p)); if (list.length) folderSheet(list, () => setSelectMode(false)); });
-$('selDelete').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted && isMine(p)); if (list.length) confirmDelete(list, () => setSelectMode(false)); });
+$('selStar').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted); if (!list.length) return; const on = !list.every(p => p.star); for (const p of list) p.star = on; save(); renderAll(); toast(on ? (list.length === 1 ? 'Marked as top' : list.length + ' marked as top') : 'Star removed'); });
+$('selFolder').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted); if (list.length) folderSheet(list, () => setSelectMode(false)); });
+$('selDelete').addEventListener('click', () => { const list = [...selected].map(byId).filter(p => p && !p.deleted); if (list.length) confirmDelete(list, () => setSelectMode(false)); });
 function confirmDelete(list, after) {
-  popup(list.length === 1 ? 'Delete this photo?' : 'Delete ' + list.length + ' photos?', 'It is removed from Lieblingsbilder' + (SYNC && session ? ' on every device and in the cloud' : '') + (list.some(p => p.room) ? ', for everyone in the room' : '') + '. Your phone\'s own gallery is not touched.', [
+  popup(list.length === 1 ? 'Delete this photo?' : 'Delete ' + list.length + ' photos?', 'It is removed from Lieblingsbilder' + (SYNC && session ? ' on every device and in the cloud' : '') + '. Your phone\'s own gallery is not touched.', [
     { label: 'Delete', cls: 'danger', fn: async () => { for (const p of list) p.deleted = true; const stored = save(); if (after) after(); if (list.includes(curPhoto)) closeView(); renderAll(); if (await stored) { for (const p of list) await purgePhotoData(p); persist(); } toast(list.length === 1 ? 'Photo deleted' : list.length + ' photos deleted'); } },
     { label: 'Keep', cls: 'quiet' }]);
 }
 
 // ---------- folders and dates ----------
 function folderSheet(list, after, opts) {
-  const names = folderNames(), cur = list.length === 1 ? list[0].folder : '', more = !!(opts && opts.more);
+  const fl = liveFolders(), cur = list.length === 1 ? list[0].folder : '', more = !!(opts && opts.more);
   openSheet(() => '<div class="grab"></div><h2>Folder</h2><p>' + (list.length === 1 ? 'Put this photo into a folder, for example Family or Holidays.' : 'Put these ' + list.length + ' photos into a folder.') + '</p>' +
-    '<div class="chips" id="fChips">' + names.map(n => '<button class="pill' + (n === cur ? ' on' : '') + '" data-f="' + esc(n) + '">' + esc(n) + '</button>').join('') + '</div>' +
+    '<div class="chips" id="fChips">' + fl.map(f => '<button class="pill' + (f.id === cur ? ' on' : '') + '" data-f="' + esc(f.id) + '">' + esc(f.name || 'Folder') + '</button>').join('') + '</div>' +
     '<input id="fNew" type="text" placeholder="New folder" autocomplete="off" autocapitalize="sentences" maxlength="40"><button id="fSave" class="btn primary">Save</button>' +
     (cur || list.some(p => p.folder) ? '<button id="fNone" class="btn quiet">No folder</button>' : '') +
     (more ? '<button id="fMore" class="btn">Select several…</button>' : ''), () => {
-      const apply = f => { for (const p of list) p.folder = f; save(); if (after) after(); renderAll(); back(); toast(f ? 'Moved to ' + f : 'Folder removed'); };
+      const apply = fid => movePhotos(list, fid).then(() => { if (after) after(); back(); }).catch(e => toast('Could not move: ' + errText(e)));
       for (const b of $('fChips').querySelectorAll('button')) b.addEventListener('click', () => apply(b.dataset.f));
-      $('fSave').addEventListener('click', () => { const f = $('fNew').value.trim().slice(0, 40); if (f) apply(f); else $('fNew').focus(); });
+      $('fSave').addEventListener('click', async () => { const name = $('fNew').value.trim().slice(0, 40); if (!name) { $('fNew').focus(); return; } try { apply((await newFolder(name)).id); } catch (e) { toast('Could not make the folder: ' + errText(e)); } });
       $('fNew').addEventListener('keydown', e => { if (e.key === 'Enter') $('fSave').click(); });
       if ($('fNone')) $('fNone').addEventListener('click', () => apply(''));
       if ($('fMore')) $('fMore').addEventListener('click', () => { back(); setTimeout(() => { setSelectMode(true); for (const p of list) if (!selected.has(p.id)) toggleSel(p.id); }, 50); });
     });
+}
+// Moving a photo into a folder puts its entry and its small key under that folder's key; the
+// files stay where they are. '' takes it out of every folder.
+async function movePhotos(list, fid) {
+  fid = fid && folderById(fid) ? fid : '';
+  for (const p of list) await moveToFolder(p, fid);
+  save(); renderAll();
+  toast(fid ? 'Moved to ' + (folderName(fid) || 'the folder') : 'Taken out of the folder');
 }
 const localInput = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()); };
 function dateSheet(p) {
@@ -389,13 +384,12 @@ function leaveView() { curPhoto = null; viewList = []; if (viewUrl) URL.revokeOb
 async function renderView() {
   const p = curPhoto; if (!p || p.deleted) { if (current() === 'view') closeView(); return; }
   const my = ++viewSeq, img = $('viewImg'), msg = $('viewMsg');
-  $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([p.room && !isMine(p) ? 'by ' + (p.by || 'someone in the room') : '', p.folder, p.name, p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
-  const mine = isMine(p); $('viewDate').hidden = !mine; $('viewFolder').hidden = !mine; $('viewDelete').hidden = !mine; $('viewStar').hidden = !mine;
+  $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([folderName(p.folder), p.name, p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
   $('viewStar').innerHTML = '<span>' + (p.star ? '★' : '☆') + '</span>' + (p.star ? 'Top' : 'Star'); $('viewStar').classList.toggle('on', !!p.star);
   if (viewUrl) { URL.revokeObjectURL(viewUrl); viewUrl = ''; }
   const tu = await thumbUrl(p); if (my !== viewSeq) return;
   if (tu) { img.src = tu; viewThumbUrl = tu; } else img.removeAttribute('src');
-  msg.hidden = false; msg.textContent = p.have ? '' : haveKeyFor(p) ? 'Fetching the full picture…' : session ? 'The key for this room is not on this device yet.' : 'Only the small picture is on this device. Sign in through the menu to fetch the full one.';
+  msg.hidden = false; msg.textContent = p.have ? '' : haveKeyFor(p) ? 'Fetching the full picture…' : session ? 'The key of this folder is not on this device yet.' : 'Only the small picture is on this device. Sign in through the menu to fetch the full one.';
   if (!p.have && !haveKeyFor(p)) return;
   try {
     const b = await fullBlob(p); if (my !== viewSeq) return;
@@ -421,7 +415,7 @@ $('viewStage').addEventListener('pointerup', e => {
   if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { stepView(dx < 0 ? 1 : -1); lastTap = 0; return; }
   if (Math.abs(dx) > 12 || Math.abs(dy) > 12) { lastTap = 0; return; }
   const now = Date.now();
-  if (now - lastTap < 350) { lastTap = 0; if (curPhoto && isMine(curPhoto)) folderSheet([curPhoto]); } else lastTap = now;      // two taps on the picture: the folder menu
+  if (now - lastTap < 350) { lastTap = 0; if (curPhoto) folderSheet([curPhoto]); } else lastTap = now;      // two taps on the picture: the folder menu
 });
 $('viewStage').addEventListener('pointercancel', () => { swipeX = swipeY = null; });
 document.addEventListener('keydown', e => { if (current() !== 'view' || locked || stack[stack.length - 1] !== 'view') return; if (e.key === 'ArrowRight') stepView(1); else if (e.key === 'ArrowLeft') stepView(-1); else if (e.key === 'Escape') back(); });
@@ -433,16 +427,16 @@ $('viewShare').addEventListener('click', async () => {
   try { await shareFiles([fileOf(p, await fullBlob(p))], p.name || fmtDate(p.taken_at)); } catch (e) { toast('Could not share: ' + errText(e)); }
   finally { viewSharing = false; busy(false); }
 });
-$('viewStar').addEventListener('click', () => { const p = curPhoto; if (!p || !isMine(p)) return; p.star = !p.star; save(); renderView(); renderHome(); toast(p.star ? 'Marked as top ★' : 'Star removed'); });
-$('viewDate').addEventListener('click', () => { if (curPhoto && isMine(curPhoto)) dateSheet(curPhoto); });
-$('viewFolder').addEventListener('click', () => { if (curPhoto && isMine(curPhoto)) folderSheet([curPhoto]); });
-$('viewDelete').addEventListener('click', () => { if (curPhoto && isMine(curPhoto)) confirmDelete([curPhoto]); });
+$('viewStar').addEventListener('click', () => { const p = curPhoto; if (!p) return; p.star = !p.star; save(); renderView(); renderHome(); toast(p.star ? 'Marked as top ★' : 'Star removed'); });
+$('viewDate').addEventListener('click', () => { if (curPhoto) dateSheet(curPhoto); });
+$('viewFolder').addEventListener('click', () => { if (curPhoto) folderSheet([curPhoto]); });
+$('viewDelete').addEventListener('click', () => { if (curPhoto) confirmDelete([curPhoto]); });
 $('viewMore').addEventListener('click', () => {
   const p = curPhoto; if (!p) return;
   openSheet(() => '<div class="grab"></div><h2>This photo</h2>' +
     '<div class="statecard"><div class="t">' + esc(p.name || 'Photo') + '</div><div class="s">Taken ' + esc(fmtDateTime(p.taken_at)) + '<br>Added ' + esc(fmtDateTime(p.created_at)) + (p.w ? '<br>' + p.w + ' × ' + p.h + ' px' : '') + (p.size ? ' · ' + esc(fmtSize(p.size)) : '') +
     '<br>' + (p.have ? 'Stored on this device, encrypted' : 'Only the thumbnail is on this device') + (SYNC && session ? (p.up ? ' · encrypted copy in the cloud' : ' · waiting for the cloud') : '') + '</div></div>' +
-    (isMine(p) ? '<input id="capIn" type="text" placeholder="Caption (optional)" value="' + esc(p.caption) + '" maxlength="200" autocomplete="off"><button id="capSave" class="btn">Save caption</button>' : (p.caption ? '<p>' + esc(p.caption) + '</p>' : '')) +
+    '<input id="capIn" type="text" placeholder="Caption (optional)" value="' + esc(p.caption) + '" maxlength="200" autocomplete="off"><button id="capSave" class="btn">Save caption</button>' +
     '<button id="saveLocal" class="btn">Save to this device</button>' +
     (!p.have && session ? '<button id="fetchFullBtn" class="btn">Keep the full picture on this device</button>' : ''), () => {
       if ($('capSave')) $('capSave').addEventListener('click', () => { p.caption = $('capIn').value.trim().slice(0, 200); save(); back(); toast('Caption saved'); });
@@ -491,54 +485,16 @@ async function makeCollage(k) {
   finally { busy(false); }
 }
 
-// ---------- spaces: own photos and the rooms, a vertical stack like Stillzeit's screens ----------
-// Arrow bars above and below name the neighbours; a vertical swipe in the dock or on a bar moves
-// one step (circular). Over the grid nothing is swiped, there one only scrolls.
-function setSpace(id) {
-  if (id && !roomById(id)) id = '';
-  if (id === space) { renderHome(); return; }
-  space = id; folderFilter = ''; if (selectMode) { selectMode = false; selected.clear(); }
-  try { localStorage.setItem('lb.space', space); } catch (e) {}
-  const list = $('list'); if (list) list.scrollTop = 0;
-  renderHome(); renderSyncLine();
-}
-function stepSpace(dir) { const l = spaceList(), i = Math.max(0, l.findIndex(s => s.id === space)); setSpace(l[(i + dir + l.length) % l.length].id); }
-function renderSpaceNav() {
-  const l = spaceList(), i = Math.max(0, l.findIndex(s => s.id === space)), many = l.length > 1;
-  $('spaceTitle').textContent = l[i].name;
-  $('navTop').hidden = !many; $('navBottom').hidden = !many;
-  if (many) { $('navTop').querySelector('.name').textContent = l[(i - 1 + l.length) % l.length].name; $('navBottom').querySelector('.name').textContent = l[(i + 1) % l.length].name; }
-  const r = space ? roomById(space) : null;
-  $('roomHead').hidden = !r;
-  if (r) { const n = r.members || 0; $('roomInfo').textContent = 'Shared room' + (n ? ' · ' + n + (n === 1 ? ' person' : ' people') : '') + (r.created_by && session && r.created_by === session.uid ? ' · yours' : ''); }
-}
-$('navTop').addEventListener('click', () => stepSpace(-1));
-$('navBottom').addEventListener('click', () => stepSpace(1));
-let tsY = null, tsX = null, tsZone = false;
-document.addEventListener('touchstart', e => { const t = e.touches[0]; tsY = t.clientY; tsX = t.clientX; tsZone = !!e.target.closest('.dock, .nav'); }, { passive: true });
-document.addEventListener('touchend', e => {
-  if (tsY == null) return;
-  const t = e.changedTouches[0], dy = t.clientY - tsY, dx = t.clientX - tsX; tsY = null;
-  if (!tsZone || locked || passive || current() !== 'home' || stack.length > 1 || Math.abs(dx) > Math.abs(dy) || Math.abs(dy) < 50) return;
-  if (dy < 0) stepSpace(1); else stepSpace(-1);
-}, { passive: true });
-$('roomInvite').addEventListener('click', () => { const r = roomById(space); if (r) roomSheet(r); });
-// one room: invite (the link goes through the share sheet or the clipboard), leave
-function roomSheet(r) {
-  const link = inviteLink(r);
-  openSheet(() => '<div class="grab"></div><h2>' + esc(r.name || 'Room') + '</h2>' +
-    '<p>Whoever opens this link and signs in joins the room and sees every picture in it. The link carries the room\'s key, so send it only to the people you want in here.</p>' +
-    (link ? '<button id="rShare" class="btn primary">Share the invite link</button><button id="rCopy" class="btn">Copy the link</button>' : '<p class="hint">The invite link is available once the room has synced.</p>') +
-    '<button id="rRename" class="btn">Rename the room</button><button id="rLeave" class="btn quiet">Leave the room</button>', () => {
-      if ($('rShare')) $('rShare').addEventListener('click', async () => { try { if (navigator.share) await navigator.share({ title: 'Lieblingsbilder: ' + (r.name || 'Room'), text: 'Join my photo room "' + (r.name || 'Room') + '" in Lieblingsbilder: ' + link }); else { await navigator.clipboard.writeText(link); toast('Link copied'); } } catch (e) { if (!(e && e.name === 'AbortError')) toast('Could not share: ' + errText(e)); } });
-      if ($('rCopy')) $('rCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch (e) { popup('Invite link', link, [{ label: 'OK', cls: 'primary' }]); } });
-      $('rRename').addEventListener('click', () => { back(); setTimeout(() => renameRoomSheet(r), 50); });
-      $('rLeave').addEventListener('click', () => { back(); setTimeout(() => popup('Leave "' + (r.name || 'Room') + '"?', 'The room\'s pictures disappear from this device. Your own pictures in it stay in the room for the others.', [{ label: 'Leave', cls: 'danger', fn: () => leaveRoom(r.id) }, { label: 'Stay', cls: 'quiet' }]), 50); });
+// ---------- folders in the menu: rename, delete ----------
+function folderManageSheet(f) {
+  const n = alive().filter(p => p.folder === f.id).length;
+  openSheet(() => '<div class="grab"></div><h2>' + esc(f.name || 'Folder') + '</h2><p>' + n + (n === 1 ? ' photo' : ' photos') + '. A folder has its own key: its photos are readable only with it.</p>' +
+    '<input id="fnIn" type="text" maxlength="40" value="' + esc(f.name || '') + '" autocomplete="off"><button id="fnSave" class="btn primary">Rename</button>' +
+    '<button id="fnDel" class="btn quiet">Delete the folder (the photos stay, without a folder)</button>', () => {
+      $('fnSave').addEventListener('click', () => { const name = $('fnIn').value.trim().slice(0, 40); if (!name) { $('fnIn').focus(); return; } f.name = name; save(); back(); renderAll(); toast('Renamed'); });
+      $('fnIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('fnSave').click(); });
+      $('fnDel').addEventListener('click', () => { back(); setTimeout(() => popup('Delete "' + (f.name || 'Folder') + '"?', 'Its ' + n + (n === 1 ? ' photo stays' : ' photos stay') + ', without a folder. Nothing is deleted from the cloud.', [
+        { label: 'Delete the folder', cls: 'danger', fn: async () => { try { await movePhotos(alive().filter(p => p.folder === f.id), ''); f.deleted = true; if (folderFilter === f.id) folderFilter = ''; save(); renderAll(); toast('Folder deleted'); } catch (e) { toast('Could not delete: ' + errText(e)); } } },
+        { label: 'Keep', cls: 'quiet' }]), 50); });
     });
-}
-function renameRoomSheet(r) {
-  openSheet(() => '<div class="grab"></div><h2>Rename the room</h2><input id="rnIn" type="text" maxlength="40" value="' + esc(r.name || '') + '" autocomplete="off"><button id="rnSave" class="btn primary">Save</button>', () => {
-    $('rnSave').addEventListener('click', () => { const n = $('rnIn').value.trim().slice(0, 40); if (!n) { $('rnIn').focus(); return; } renameRoom(r, n); back(); });
-    $('rnIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('rnSave').click(); });
-  });
 }

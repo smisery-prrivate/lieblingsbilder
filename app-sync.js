@@ -17,15 +17,15 @@ const jwtPayload = t => JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').repla
 const newTag = () => uid().replace(/-/g, '').slice(0, 12);
 const tick = () => { try { localStorage.setItem(TICK_KEY, Date.now() + '.' + Math.random()); } catch (e) {} };
 const photoLabel = p => p.name || fmtDate(p.taken_at);
-const myLabel = () => session && session.email ? session.email.split('@')[0] : '';      // how the others in a room see who added a picture
-const spaceKey = (u, room) => room ? u + '/r/' + room : u;      // the pull bookmark of each space
+const spaceKey = (u, folder) => folder ? u + '/f/' + folder : u;      // the pull bookmark of each compartment (no folder, or one folder)
+const FOLDERS_KEY = u => u + '/folders';
 
 // ---------- session (stored encrypted like everything else) ----------
 async function loadSession() {
   session = null;
   try { const r = await idb.get('meta', 'session'); if (r) session = await Vault.openJson(r.data, 'lb|session'); } catch (e) { session = null; }
-  if (session) { await Vault.loadCloudKey(session.uid).catch(() => {}); await Vault.loadRoomKeys(session.uid).catch(() => {}); }
-  else if (account) await Vault.loadRoomKeys(account).catch(() => {});      // signed out: the rooms' pictures stay readable here
+  if (session) { await Vault.loadCloudKey(session.uid).catch(() => {}); await Vault.loadFolderKeys(session.uid).catch(() => {}); }
+  else if (account) await Vault.loadFolderKeys(account).catch(() => {});      // signed out: the folders' pictures stay readable here
 }
 async function storeSession() {
   if (session) await idb.put('meta', { id: 'session', data: await Vault.sealJson(session, 'lb|session') }); else await idb.del('meta', 'session');
@@ -60,18 +60,16 @@ async function adoptLink(t) {
   await storeSession();
   if (account !== session.uid) {                                    // first sign-in, or another account: this cloud knows nothing from here yet
     for (const p of photos) { p.srv = 0; p.up = false; p.tag = ''; p.pk = ''; p.seen = 0; p.cloudPurged = false; delete p.owed; }
-    for (const p of photos) if (p.room) await purgePhotoData(p);
-    photos = photos.filter(p => p.have && !p.room);                 // a photo that was only in the old cloud is not here any more; the old account's rooms go with it
-    for (const r of rooms) await Vault.dropRoomKey(r.id).catch(() => {});
-    rooms = []; if (space) { space = ''; try { localStorage.setItem('lb.space', ''); } catch (e) {} }
-    snap = {}; for (const p of photos) snap[p.id] = sigOf(p);
+    photos = photos.filter(p => p.have);                            // a photo that was only in the old cloud is not here any more
+    for (const f of folders) { f.srv = 0; f.seen = 0; }               // the folders and their keys stay: they are made here and go up again under the new account
+    snap = {}; for (const p of photos) snap[p.id] = sigOf(p); fsnap = {}; for (const f of folders) fsnap[f.id] = fsigOf(f);
     cursors[session.uid] = 0; try { localStorage.removeItem(OK_KEY); } catch (e) {}
     await Vault.dropCloudKey();
   }
   account = session.uid;
   persist();
   await Vault.loadCloudKey(session.uid).catch(() => {});
-  await Vault.loadRoomKeys(session.uid).catch(() => {});
+  await Vault.loadFolderKeys(session.uid).catch(() => {});
   return '';
 }
 // Signing out keeps every cloud mark: the account may come back, and then the cloud's newer
@@ -162,42 +160,42 @@ let syncCtl = null; const upFail = new Map();
 function abortSync() { if (syncCtl) syncCtl.abort(); }
 function syncRetry() { upFail.clear(); if (syncState === 'error') setSyncState(''); syncNow(); }
 const sealedMeta = p => { const obj = p.deleted ? { del: true, u: p.updated_at }
-  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', by: p.room ? (p.by || myLabel()) : '', u: p.updated_at, del: false };
-  return p.room ? Vault.rsealJson(p.room, obj, 'lb|meta|' + p.id) : Vault.csealJson(obj, 'lb|meta|' + p.id); };
-const objName = (u, p, tag, thumb) => (p.room ? 'room/' + p.room : u) + '/' + p.id + '.' + tag + (thumb ? '.t' : '');
+  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', u: p.updated_at, del: false };
+  return p.folder ? Vault.fsealJson(p.folder, obj, 'lb|meta|' + p.id) : Vault.csealJson(obj, 'lb|meta|' + p.id); };
+const objName = (u, p, tag, thumb) => u + '/' + p.id + '.' + tag + (thumb ? '.t' : '');
 // One entry from the cloud, applied here.
-async function applyRow(row, room) {
-  const id = String(row.id), upd = +row.updated_at || 0, del = !!row.deleted, stamp = +row.synced_at || 0, who = String(row.user_id || '');
-  room = room || '';
+async function applyRow(row, folder) {
+  const id = String(row.id), upd = +row.updated_at || 0, del = !!row.deleted, stamp = +row.synced_at || 0;
+  folder = folder || '';
   const p0 = byId(id);
   if (!p0 && del) return 'skip';
   if (!row.meta) throw new Error('entry without a seal');
-  const m = room ? await Vault.ropenJson(room, row.meta, 'lb|meta|' + id) : await Vault.copenJson(row.meta, 'lb|meta|' + id);     // throws unless it was sealed with the right key for this photo
+  const m = folder ? await Vault.fopenJson(folder, row.meta, 'lb|meta|' + id) : await Vault.copenJson(row.meta, 'lb|meta|' + id);     // throws unless it was sealed with the right key for this photo
   if (!!m.del !== del || +m.u !== upd) throw new Error('entry does not match its seal');
   if (!p0) {
     const n = migrate({ id, name: String(m.name || ''), type: safeType(m.type), w: +m.w || 0, h: +m.h || 0, size: +m.size || 0, taken_at: +m.taken_at || upd, created_at: +m.created_at || upd,
-      folder: String(m.folder || ''), caption: String(m.caption || ''), star: !!m.star, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), room, uid: who, by: String(m.by || '').slice(0, 40) });
+      caption: String(m.caption || ''), star: !!m.star, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), folder });
     photos.push(n); snap[id] = sigOf(n); return 'new';
   }
   const p = p0, before = sigOf(p), wasDeleted = p.deleted;
-  if (p.room !== room) return 'skip';                              // the same id in another space: never
-  p.seen = stamp; if (who && !p.uid) p.uid = who; if (m.by) p.by = String(m.by).slice(0, 40);
+  if (upd < p.updated_at && folder !== p.folder) { p.seen = stamp; p.srv = -1; if (snap[id] === before) snap[id] = sigOf(p); return 'ok'; }      // an older entry from the folder it was moved out of: ours goes up again
+  p.seen = stamp;
   if (!del && !p.up && m.tag) { p.up = true; p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // another device holds the files up already (or ours were accepted before the list was saved)
   if (!del && m.tag && p.tag && m.tag !== p.tag && p.up) { p.owed = p.owed || []; for (const n of [objName(session.uid, p, p.tag, false), objName(session.uid, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); }      // two devices uploaded the same photo: one set of files is enough
   if (upd > p.updated_at) {                                       // the later change wins
-    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = String(m.folder || ''); p.caption = String(m.caption || ''); p.star = !!m.star; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag && m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); } }      // the files moved (to Drive) on another device
+    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; p.caption = String(m.caption || ''); p.star = !!m.star; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag) { if (m.pk) p.pk = String(m.pk); if (m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); } } }      // moved to another folder (the key rewrapped) or the files moved (to Drive) on another device
     p.deleted = del; p.updated_at = upd; p.srv = upd;
     if (del && !wasDeleted) await deletedElsewhere(p);
     else if (!del && wasDeleted) { p.cloudPurged = false; p.have = false; p.th = false; }      // it comes back on another device: fetched again from the cloud
   } else if (upd === p.updated_at) {
     if (!!m.del !== !!p.deleted) {                                 // two devices stamped alike: a delete beats a live change, on both of them
       if (del) { p.deleted = true; p.srv = upd; await deletedElsewhere(p); } else { p.srv = -1; p.cloudPurged = false; }
-    } else if (!del && (p.folder !== String(m.folder || '') || p.caption !== String(m.caption || '') || p.taken_at !== +m.taken_at || !!p.star !== !!m.star)) {      // equal stamps, different fields: decided alike everywhere
-      const mine = JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star]), theirs = JSON.stringify([+m.taken_at, String(m.folder || ''), String(m.caption || ''), !!m.star]);
-      if (theirs > mine) { p.taken_at = +m.taken_at || p.taken_at; p.folder = String(m.folder || ''); p.caption = String(m.caption || ''); p.star = !!m.star; p.srv = upd; } else p.srv = -1;
+    } else if (!del && (p.folder !== folder || p.caption !== String(m.caption || '') || p.taken_at !== +m.taken_at || !!p.star !== !!m.star)) {      // equal stamps, different fields: decided alike everywhere
+      const mine = JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star]), theirs = JSON.stringify([+m.taken_at, folder, String(m.caption || ''), !!m.star]);
+      if (theirs > mine) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; if (m.pk) p.pk = String(m.pk); p.caption = String(m.caption || ''); p.star = !!m.star; p.srv = upd; } else p.srv = -1;
     } else p.srv = upd;
   } else if (del && !p.deleted) {                                   // our later change keeps the photo, but the other device removed the files
-    if (p.have && isMine(p)) { p.up = false; p.tag = ''; p.pk = ''; p.st = 'sb'; p.df = ''; p.dt = ''; p.srv = -1; }           // the picture here is the only one left: it goes up again under a fresh name and key
+    if (p.have) { p.up = false; p.tag = ''; p.pk = ''; p.st = 'sb'; p.df = ''; p.dt = ''; p.srv = -1; }           // the picture here is the only one left: it goes up again under a fresh name and key
     else { p.deleted = true; p.updated_at = upd; p.srv = upd; await deletedElsewhere(p); }
   } else { p.srv = -1; if (p.deleted) p.cloudPurged = false; }    // the cloud holds an older entry than ours: send ours again
   if (snap[id] === before) snap[id] = sigOf(p);                   // a local change that is not saved yet is never swallowed
@@ -217,10 +215,10 @@ async function dropObj(u, p, name) {
   else { p.owed = p.owed || []; if (!p.owed.includes(name)) p.owed.push(name); const f = owedFail.get(name), n = (f ? f.n : 0) + 1; owedFail.set(name, { n, until: Date.now() + Math.min(3600000, 60000 * Math.pow(4, n - 1)) }); }
   return ok;
 }
-const entryDue = p => isMine(p) && (p.deleted ? ((p.srv !== 0 || p.up) && p.srv !== p.updated_at) : p.up && p.srv !== p.updated_at);
+const entryDue = p => p.deleted ? ((p.srv !== 0 || p.up) && p.srv !== p.updated_at) : p.up && p.srv !== p.updated_at;
 // One conditional write of the entry. true: accepted. false: another device wrote first (the entry is pulled again).
 async function writeEntry(p, u) {
-  const row = { id: p.id, user_id: u, room_id: p.room || null, updated_at: p.updated_at, deleted: !!p.deleted, meta: await sealedMeta(p) };
+  const row = { id: p.id, user_id: u, folder_id: p.folder || null, updated_at: p.updated_at, deleted: !!p.deleted, meta: await sealedMeta(p) };
   const headers = { 'Content-Type': 'application/json', Prefer: 'return=representation' };
   const r = p.seen ? await api('PATCH', '/rest/v1/lb_photos?select=synced_at&user_id=eq.' + u + '&id=eq.' + encodeURIComponent(p.id) + '&synced_at=eq.' + p.seen, { headers, body: JSON.stringify(row) })
     : await api('POST', '/rest/v1/lb_photos?select=synced_at', { headers, body: JSON.stringify(row) });
@@ -236,14 +234,21 @@ async function pullOne(p, u) {
   if (!r.ok) throw await httpError('Loading the entry', r);
   const rows = await r.json(); if (!rows.length) { p.seen = 0; return; }
   p.seen = +rows[0].synced_at || 0;
-  await applyRow(rows[0], p.room);
+  await applyRow(rows[0], String(rows[0].folder_id || ''));
 }
 // The sealed file: a small header (photo id, tag, kind) in front of the bytes, so a file can never
 // stand in for another one. Every photo has its own key (wrapped by the cloud key, carried in the
 // entry), and the full picture and the thumbnail use two keys derived from it: a key that leaks
 // opens one picture, and thumbnail keys open no full pictures.
-const itemKey = p => { if (!p.pk) throw new Error('the key of this photo is missing'); return p.room ? Vault.runwrapItemKey(p.room, p.pk, 'lb|pk|' + p.id) : Vault.unwrapItemKey(p.pk, 'lb|pk|' + p.id); };
-const haveKeyFor = p => !!session && (p.room ? Vault.hasRoomKey(p.room) : Vault.hasCloudKey(session.uid));
+const itemKey = p => { if (!p.pk) throw new Error('the key of this photo is missing'); return p.folder ? Vault.funwrapItemKey(p.folder, p.pk, 'lb|pk|' + p.id) : Vault.unwrapItemKey(p.pk, 'lb|pk|' + p.id); };
+const haveKeyFor = p => !!session && (p.folder ? Vault.hasFolderKey(p.folder) : Vault.hasCloudKey(session.uid));
+const wrapItemKeyFor = (p, raw) => p.folder ? Vault.fwrapItemKey(p.folder, raw, 'lb|pk|' + p.id) : Vault.wrapItemKey(raw, 'lb|pk|' + p.id);
+// into another folder (or none): the photo's small key is rewrapped under the new compartment's key; the files stay
+async function moveToFolder(p, fid) {
+  if (p.folder === fid) return;
+  if (p.pk) { if (!haveKeyFor(p)) throw new Error('The key of its current folder is not on this device.'); const raw = await itemKey(p); p.folder = fid; p.pk = await wrapItemKeyFor(p, raw); }
+  else p.folder = fid;
+}
 async function sealFile(p, raw, blob, kind) {
   const head = utf8(JSON.stringify({ id: p.id, tag: p.tag, k: kind })), bytes = new Uint8Array(await blob.arrayBuffer());
   const plain = new Uint8Array(4 + head.length + bytes.length);
@@ -269,7 +274,7 @@ async function uploadPhoto(p, u) {
   const tag = newTag(), full = await imgGet(p.id, p.type); if (!full) { p.have = false; throw new Error('"' + photoLabel(p) + '" is not on this device any more.'); }
   if (full.size + 4096 > MAX_FILE) throw new Error('"' + photoLabel(p) + '" is larger than 50 MB and cannot be synced.');
   const was = p.tag, wasPk = p.pk, raw = Vault.newItemKey(), toDrive = driveWanted(p), made = [];
-  p.tag = tag; p.pk = p.room ? await Vault.rwrapItemKey(p.room, raw, 'lb|pk|' + p.id) : await Vault.wrapItemKey(raw, 'lb|pk|' + p.id); if (!p.uid) p.uid = u;
+  p.tag = tag; p.pk = await wrapItemKeyFor(p, raw);
   try {
     const put = async (blob, kind) => {
       const body = await sealFile(p, raw, blob, kind);
@@ -299,16 +304,16 @@ async function syncNow() {
     if (!(await ensureSession())) return;
     if (!(await ensureCloudKey())) return;
     const u = session.uid, stop = () => !session || session.uid !== u || passive || locked || !isOwner() || ctl.signal.aborted;
-    await syncRooms(u); if (stop()) return;
-    await tryPendingJoin(); if (stop()) return;
+    await migrateFolderNames(); if (stop()) return;
     let unreadable = 0, moved = false;
-    for (const sp of [''].concat(rooms.map(r => r.id))) {          // each space has its own bookmark, so a room joined later is read from its beginning
-      if (sp && !Vault.hasRoomKey(sp)) continue;
+    if (await syncFolders(u)) moved = true; if (stop()) return;
+    for (const sp of [''].concat(folders.map(f => f.id))) {         // each compartment has its own bookmark
+      if (sp && !Vault.hasFolderKey(sp)) continue;
       const ck = spaceKey(u, sp), cursor = cursors[ck] || 0, from = Math.max(0, cursor - 3000);
       let maxSeen = cursor, after = null;
       for (;;) {                                                  // pull what changed since the last visit; pages by stamp and id, never by offset
-        const where = (sp ? '&room_id=eq.' + encodeURIComponent(sp) : '&room_id=is.null') + (after ? '&or=(synced_at.gt.' + after.s + ',and(synced_at.eq.' + after.s + ',id.gt.' + encodeURIComponent(after.id) + '))' : '&synced_at=gt.' + from);
-        const r = await api('GET', '/rest/v1/lb_photos?select=id,user_id,meta,updated_at,deleted,synced_at' + where + '&order=synced_at.asc,id.asc&limit=500');
+        const where = (sp ? '&folder_id=eq.' + encodeURIComponent(sp) : '&folder_id=is.null') + (after ? '&or=(synced_at.gt.' + after.s + ',and(synced_at.eq.' + after.s + ',id.gt.' + encodeURIComponent(after.id) + '))' : '&synced_at=gt.' + from);
+        const r = await api('GET', '/rest/v1/lb_photos?select=id,meta,updated_at,deleted,synced_at' + where + '&order=synced_at.asc,id.asc&limit=500');
         if (!r.ok) throw await httpError('Loading the list', r);
         const rows = await r.json();
         for (const row of rows) { maxSeen = Math.max(maxSeen, +row.synced_at || 0); try { await applyRow(row, sp); } catch (e) { unreadable++; } }
@@ -321,9 +326,9 @@ async function syncNow() {
     if (moved && !(await persist())) throw new Error('The photo list could not be saved.');      // the bookmarks move only with the list
     renderAll();
     let upFailed = 0, upWhy = '';
-    const driveOut = !!(DRIVE && drive && !driveTokenOk());      // own photos wait for the tap; rooms go on
+    const driveOut = !!(DRIVE && drive && !driveTokenOk());      // photos wait for the tap
     if (driveOut) driveNeedsToken();
-    const needsUp = p => !p.deleted && p.have && !p.up && isMine(p) && (!p.room || Vault.hasRoomKey(p.room)) && !(driveOut && !p.room);
+    const needsUp = p => !p.deleted && p.have && !p.up && (!p.folder || Vault.hasFolderKey(p.folder)) && !driveOut;
     const upTotal = photos.filter(needsUp).length; let upDone = 0;
     for (const p of photos.slice()) {                             // upload the pictures added here; one failing photo does not hold up the rest
       if (stop()) return;
@@ -347,7 +352,7 @@ async function syncNow() {
     // own photos still in the Supabase bucket move to Drive: the sealed bytes as they are (no key
     // needed), one photo at a time; the entry then says where they are, and the bucket's copies go
     // once the entry is accepted (owed objects). Stops by itself when nothing is left.
-    const toMove = p => settings.moveToDrive && !p.deleted && !p.room && isMine(p) && p.up && p.st !== 'gd' && !!p.tag;
+    const toMove = p => settings.moveToDrive && !p.deleted && p.up && p.st !== 'gd' && !!p.tag;
     if (settings.moveToDrive && DRIVE && drive && driveTokenOk()) {
       const list = photos.filter(toMove); let i = 0;
       for (const p of list) {
@@ -383,7 +388,7 @@ async function syncNow() {
         if (e instanceof TypeError || navigator.onLine === false || ctl.signal.aborted) break;
       }
     }
-    for (const p of photos) if (p.deleted && isMine(p) && !p.cloudPurged && (p.srv === p.updated_at || (!p.srv && !p.up))) {      // the files of a deleted photo go too; counted as done only when the cloud confirms
+    for (const p of photos) if (p.deleted && !p.cloudPurged && (p.srv === p.updated_at || (!p.srv && !p.up))) {      // the files of a deleted photo go too; counted as done only when the cloud confirms
       if (stop()) return;
       try {
         if (p.srv) {
@@ -419,7 +424,7 @@ async function syncNow() {
       fDone++;
       try { if (!(await ensureSession())) return; await fetchFull(p, progressMsg('Fetching', fDone, fTotal, p)); } catch (e) { failed++; why = errText(e); }
     }
-    if (driveOut && photos.some(p => !p.deleted && p.have && !p.up && !p.room && isMine(p))) throw new Error('Google Drive needs a tap to reconnect (menu) before your new photos can be uploaded.');
+    if (driveOut && photos.some(p => !p.deleted && p.have && !p.up)) throw new Error('Google Drive needs a tap to reconnect (menu) before your new photos can be uploaded.');
     if (unreadable) throw new Error(unreadable + (unreadable === 1 ? ' entry' : ' entries') + ' in the cloud cannot be opened with the key on this device.');
     if (upFailed) throw new Error(upFailed === 1 ? upWhy : upFailed + ' photos could not be uploaded. Last reason: ' + upWhy);
     if (entryFailed) throw new Error(entryFailed === 1 ? entryWhy : entryFailed + ' entries could not be saved. Last reason: ' + entryWhy);
@@ -459,7 +464,7 @@ async function fetchThumb(p) {
   });
 }
 async function fetchFull(p, msg) {
-  if (!haveKeyFor(p)) throw new Error(session ? 'The key for this ' + (p.room ? 'room' : 'photo') + ' is not on this device yet.' : 'Not signed in.');
+  if (!haveKeyFor(p)) throw new Error(session ? 'The key of this ' + (p.folder ? 'folder' : 'photo') + ' is not on this device yet.' : 'Not signed in.');
   if (!p.up || !p.tag) throw new Error('This photo has not reached the cloud yet.');
   return fetchShared('f' + p.id, async () => {
     const u = session.uid; if (msg) setSyncState('busy', msg);
@@ -500,7 +505,7 @@ function renderSyncLine() {
   const el = $('syncline'); el.className = 'subline';
   if (!SYNC) { el.textContent = 'Encrypted on this device'; return; }
   if (!session) { el.textContent = 'Encrypted on this device · tap to add cloud sync'; return; }
-  if (DRIVE && drive && driveState === 'reconnect' && (photos.some(p => !p.deleted && p.have && !p.up && !p.room) || photos.some(p => !p.deleted && p.st === 'gd' && !p.th))) { el.className = 'subline err'; el.textContent = 'Google Drive needs a tap to reconnect · tap here'; return; }
+  if (DRIVE && drive && driveState === 'reconnect' && (photos.some(p => !p.deleted && p.have && !p.up) || photos.some(p => !p.deleted && p.st === 'gd' && !p.th))) { el.className = 'subline err'; el.textContent = 'Google Drive needs a tap to reconnect · tap here'; return; }
   if (!Vault.hasCloudKey(session.uid)) {
     el.className = 'subline err';
     el.textContent = syncState === 'error' ? '⚠ ' + syncMsg : keyNeed ? 'Cloud sync is waiting for your encryption password · tap here' : 'Connecting to the cloud…';
@@ -564,107 +569,84 @@ function renderSyncBox() {
   if ($('signOut')) $('signOut').addEventListener('click', () => popup('Sign out on this device?', 'Your photos stay on this phone. They stop syncing until you sign in and enter your encryption password again.', [{ label: 'Sign out', fn: signOut }, { label: 'Stay signed in', cls: 'quiet' }]));
 }
 
-// ---------- rooms: shared spaces ----------
-// A room is a random key that its members hold. The invite link carries the room id, an invite
-// token (the server knows its hash and admits whoever presents it) and the key, in the fragment,
-// which never reaches the server. Each member keeps the key wrapped with their own cloud key in
-// their member row, so their other devices find the room after the encryption password.
-const hexOf = u8 => [...u8].map(b => b.toString(16).padStart(2, '0')).join('');
-const sha256hex = async s => hexOf(new Uint8Array(await crypto.subtle.digest('SHA-256', utf8(s))));
-const roomReady = () => !!session && Vault.hasCloudKey(session.uid);
-function inviteLink(r) { if (!r || !r.token || !Vault.hasRoomKey(r.id)) return ''; return location.origin + location.pathname + '#join=' + r.id + '.' + r.token + '.' + Vault.roomKeyB64(r.id); }
-function parseJoin(s) { const m = /^#?join=([A-Za-z0-9-]{8,64})\.([a-f0-9]{16,64})\.([A-Za-z0-9+/=]{40,48})$/.exec(String(s || '').trim().replace(/^.*#/, '#')); return m ? { id: m[1], token: m[2], key: m[3] } : null; }
-async function createRoom(name) {
-  if (!roomReady()) throw new Error('Sign in and set the encryption password first (menu).');
-  if (!(await ensureSession())) throw new Error('Not signed in.');
-  const u = session.uid, id = uid(), token = hexOf(crypto.getRandomValues(new Uint8Array(16))), now = Date.now();
-  await Vault.keepRoomKey(id, Vault.newRoomKey(), u);
-  try {
-    const json = { 'Content-Type': 'application/json', Prefer: 'return=minimal' };
-    const info = await Vault.rsealJson(id, { name, token }, 'lb|roominfo|' + id);
-    let r = await api('POST', '/rest/v1/lb_rooms', { headers: json, body: JSON.stringify({ id, created_by: u, info, invite_hash: await sha256hex(token), created_at: now }) });
-    if (!r.ok) throw await httpError('Creating the room', r);
-    r = await api('POST', '/rest/v1/lb_room_members', { headers: json, body: JSON.stringify({ room_id: id, user_id: u, wrapped: await Vault.wrapRoomKey(id, u), joined_at: now }) });
-    if (!r.ok) throw await httpError('Joining the room', r);
-  } catch (e) { await Vault.dropRoomKey(id).catch(() => {}); throw e; }
-  rooms.push({ id, name, token, created_by: u, joined_at: now, members: 1 });
-  cursors[spaceKey(u, id)] = 0; persist();
-  return id;
+// Installs from before v9 kept a folder as a name on each photo. Such a name becomes a folder of
+// its own (a new key) and the photo moves into it; a photo whose key is already wrapped by the
+// cloud key waits for that key (sign-in and the encryption password), the others move at once.
+async function migrateFolderNames() {
+  const legacy = photos.filter(p => p.folder && !folders.some(f => f.id === p.folder));
+  if (!legacy.length) return;
+  const u = session ? session.uid : account; let moved = 0;
+  for (const p of legacy) {
+    if (p.pk && !(session && Vault.hasCloudKey(session.uid))) continue;
+    let f = folders.find(x => !x.deleted && x.name === p.folder);
+    if (!f) { try { f = await newFolder(p.folder); } catch (e) { continue; } }
+    const name = p.folder; p.folder = '';
+    try { if (p.pk) { const raw = await Vault.unwrapItemKey(p.pk, 'lb|pk|' + p.id); p.folder = f.id; p.pk = await Vault.fwrapItemKey(f.id, raw, 'lb|pk|' + p.id); } else p.folder = f.id; moved++; }
+    catch (e) { p.folder = name; }
+  }
+  if (moved) save();
 }
-async function joinRoom(j) {
-  if (!roomReady()) { await setPendingJoin(j); return 'later'; }
-  if (!(await ensureSession())) throw new Error('Not signed in.');
-  const u = session.uid;
-  if (roomById(j.id)) return 'already';
-  await Vault.keepRoomKey(j.id, Vault.unb64(j.key), u);
-  try {
-    const r = await api('POST', '/rest/v1/rpc/lb_join_room', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rid: j.id, token: j.token, wrapped_key: await Vault.wrapRoomKey(j.id, u) }) });
-    if (!r.ok) throw await httpError('Joining the room', r);
-    if ((await r.json()) !== true) throw new Error('This invite link is not valid any more.');
-    const rr = await api('GET', '/rest/v1/lb_rooms?select=id,info,created_by&id=eq.' + encodeURIComponent(j.id));
-    if (!rr.ok) throw await httpError('Reading the room', rr);
-    const row = (await rr.json())[0]; if (!row) throw new Error('The room is gone.');
-    const info = await Vault.ropenJson(j.id, row.info, 'lb|roominfo|' + j.id);
-    rooms.push({ id: j.id, name: String(info.name || 'Room').slice(0, 40), token: String(info.token || ''), created_by: row.created_by, joined_at: Date.now(), members: 0 });
-  } catch (e) { await Vault.dropRoomKey(j.id).catch(() => {}); throw e; }
-  cursors[spaceKey(u, j.id)] = 0; persist();
-  return 'joined';
+// ---------- folders: the compartments, in the cloud ----------
+// One row per folder: the name sealed with the folder's key, the key wrapped by the cloud key
+// (a protected folder carries a passphrase-wrapped copy instead, see the concept). Written and
+// read like photo entries: conditionally on the server stamp, the later change wins.
+const folderInfoAad = id => 'lb|folderinfo|' + id;
+const folderDue = f => f.srv !== f.updated_at;
+async function folderRow(f, u) {
+  return { id: f.id, user_id: u, info: await Vault.fsealJson(f.id, { name: f.name, u: f.updated_at, del: !!f.deleted }, folderInfoAad(f.id)), wrap: await Vault.wrapFolderKey(f.id, u), pwrap: '', psalt: '', piter: 0, updated_at: f.updated_at, deleted: !!f.deleted };
 }
-async function leaveRoom(id) {
-  const r = roomById(id); if (!r) return;
-  try { if (session && await ensureSession()) { const d = await api('DELETE', '/rest/v1/lb_room_members?room_id=eq.' + encodeURIComponent(id) + '&user_id=eq.' + session.uid); if (!d.ok) throw await httpError('Leaving the room', d); } }
-  catch (e) { toast('Could not leave: ' + errText(e)); return; }
-  await removeRoomLocal(id); toast('You left "' + (r.name || 'Room') + '".');
+async function writeFolder(f, u) {
+  const row = await folderRow(f, u), headers = { 'Content-Type': 'application/json', Prefer: 'return=representation' };
+  const r = f.seen ? await api('PATCH', '/rest/v1/lb_folders?select=synced_at&user_id=eq.' + u + '&id=eq.' + encodeURIComponent(f.id) + '&synced_at=eq.' + f.seen, { headers, body: JSON.stringify(row) })
+    : await api('POST', '/rest/v1/lb_folders?select=synced_at', { headers, body: JSON.stringify(row) });
+  if (r.status === 409) return false;
+  if (!r.ok) throw await httpError('Saving the folders', r);
+  const out = await r.json(); if (!Array.isArray(out) || !out.length) return false;
+  f.seen = +out[0].synced_at || f.seen;
+  if (f.updated_at === row.updated_at) f.srv = f.updated_at;
+  return true;
 }
-async function removeRoomLocal(id) {
-  for (const p of photos) if (p.room === id) await purgePhotoData(p);
-  photos = photos.filter(p => p.room !== id); snap = {}; for (const p of photos) snap[p.id] = sigOf(p);
-  rooms = rooms.filter(r => r.id !== id);
-  for (const k of Object.keys(cursors)) if (k.endsWith('/r/' + id)) delete cursors[k];
-  await Vault.dropRoomKey(id).catch(() => {});
-  if (space === id) setSpace(''); else renderAll();
-  persist();
+async function applyFolderRow(row, u) {
+  const id = String(row.id), upd = +row.updated_at || 0, del = !!row.deleted, stamp = +row.synced_at || 0;
+  if (!Vault.hasFolderKey(id)) {
+    if (!row.wrap) return 'locked';                              // a protected folder: its key waits for the passphrase
+    await Vault.keepFolderKey(id, await Vault.unwrapFolderKey(row.wrap, u, id), u);
+  }
+  const m = await Vault.fopenJson(id, row.info, folderInfoAad(id));
+  if (+m.u !== upd || !!m.del !== del) throw new Error('folder entry does not match its seal');
+  let f = folders.find(x => x.id === id);
+  if (!f) { f = migrateFolder({ id, name: String(m.name || ''), created_at: upd, updated_at: upd, deleted: del, srv: upd, seen: stamp }); folders.push(f); fsnap[id] = fsigOf(f); return 'new'; }
+  const before = fsigOf(f), wasDeleted = f.deleted;
+  f.seen = stamp;
+  if (upd > f.updated_at) { f.name = String(m.name || ''); f.deleted = del; f.updated_at = upd; f.srv = upd; if (del && !wasDeleted) { for (const p of photos) if (p.folder === id && !p.deleted) { /* the other device moved them out; their entries follow */ } if (folderFilter === id) folderFilter = ''; } }
+  else if (upd === f.updated_at) { if (!!m.del !== !!f.deleted) { if (del) { f.deleted = true; f.srv = upd; } else f.srv = -1; } else if (String(m.name || '') !== f.name) { if (String(m.name || '') > f.name) { f.name = String(m.name || ''); f.srv = upd; } else f.srv = -1; } else f.srv = upd; }
+  else f.srv = -1;
+  if (fsnap[id] === before) fsnap[id] = fsigOf(f);
+  return 'ok';
 }
-async function renameRoom(r, name) {
-  try {
-    if (!(await ensureSession())) throw new Error('Not signed in.');
-    const info = await Vault.rsealJson(r.id, { name, token: r.token }, 'lb|roominfo|' + r.id);
-    const x = await api('PATCH', '/rest/v1/lb_rooms?id=eq.' + encodeURIComponent(r.id), { headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify({ info }) });
-    if (!x.ok) throw await httpError('Renaming', x);
-    r.name = name; persist(); renderAll(); toast('Renamed');
-  } catch (e) { toast('Could not rename: ' + errText(e)); }
-}
-// the rooms this account is in, their names and keys; rooms left elsewhere go
-async function syncRooms(u) {
-  if (!Vault.hasCloudKey(u)) return;
-  const r = await api('GET', '/rest/v1/lb_room_members?select=room_id,user_id,wrapped,joined_at');
-  if (!r.ok) throw await httpError('Loading the rooms', r);
-  const all = await r.json(), mine = all.filter(x => x.user_id === u), ids = new Set(mine.map(x => x.room_id));
-  for (const rm of rooms.slice()) if (!ids.has(rm.id)) await removeRoomLocal(rm.id);
-  let changed = false;
-  if (mine.length) {
-    const rr = await api('GET', '/rest/v1/lb_rooms?select=id,info,created_by');
-    const rowsById = {}; if (rr.ok) for (const row of await rr.json()) rowsById[row.id] = row;
-    for (const mb of mine) {
-      try {
-        if (!Vault.hasRoomKey(mb.room_id)) { if (!mb.wrapped) continue; await Vault.keepRoomKey(mb.room_id, await Vault.unwrapRoomKey(mb.wrapped, u, mb.room_id), u); }
-        const row = rowsById[mb.room_id]; let info = null;
-        if (row && row.info) { try { info = await Vault.ropenJson(mb.room_id, row.info, 'lb|roominfo|' + mb.room_id); } catch (e) {} }
-        let rm = roomById(mb.room_id);
-        if (!rm) { rm = { id: mb.room_id, name: 'Room', token: '', created_by: row ? row.created_by : '', joined_at: +mb.joined_at || Date.now() }; rooms.push(rm); cursors[spaceKey(u, rm.id)] = cursors[spaceKey(u, rm.id)] || 0; changed = true; }
-        if (info) { const n = String(info.name || 'Room').slice(0, 40), t = String(info.token || ''); if (rm.name !== n || rm.token !== t) { rm.name = n; rm.token = t; changed = true; } }
-        const cnt = all.filter(x => x.room_id === mb.room_id).length; if (rm.members !== cnt) { rm.members = cnt; changed = true; }
-      } catch (e) {}
+// pull the folders changed since the last visit, push the ones changed here; true when the bookmark moved
+async function syncFolders(u) {
+  const ck = FOLDERS_KEY(u), cursor = cursors[ck] || 0;
+  let maxSeen = cursor, after = null;
+  for (;;) {
+    const where = after ? '&or=(synced_at.gt.' + after.s + ',and(synced_at.eq.' + after.s + ',id.gt.' + encodeURIComponent(after.id) + '))' : '&synced_at=gt.' + Math.max(0, cursor - 3000);
+    const r = await api('GET', '/rest/v1/lb_folders?select=id,info,wrap,pwrap,psalt,piter,updated_at,deleted,synced_at' + where + '&order=synced_at.asc,id.asc&limit=500');
+    if (!r.ok) throw await httpError('Loading the folders', r);
+    const rows = await r.json();
+    for (const row of rows) { maxSeen = Math.max(maxSeen, +row.synced_at || 0); try { await applyFolderRow(row, u); } catch (e) {} }
+    if (rows.length < 500) break;
+    const last = rows[rows.length - 1]; after = { s: +last.synced_at || 0, id: String(last.id) };
+  }
+  let moved = false;
+  if (maxSeen > cursor) { cursors[ck] = maxSeen; moved = true; }
+  for (const f of folders.slice()) {
+    if (!folderDue(f) || !Vault.hasFolderKey(f.id)) continue;
+    let done = await writeFolder(f, u);
+    if (!done) {                                                   // another device wrote first: take its row, then once more
+      const r = await api('GET', '/rest/v1/lb_folders?select=id,info,wrap,pwrap,psalt,piter,updated_at,deleted,synced_at&user_id=eq.' + u + '&id=eq.' + encodeURIComponent(f.id));
+      if (r.ok) { const rows = await r.json(); if (rows.length) { f.seen = +rows[0].synced_at || 0; try { await applyFolderRow(rows[0], u); } catch (e) {} } else f.seen = 0; }
+      if (folderDue(f)) done = await writeFolder(f, u);
     }
   }
-  if (changed) { persist(); renderAll(); }
-}
-// a join from a link that arrived before sign-in or the encryption password: kept sealed, done later
-async function setPendingJoin(j) { try { await idb.put('meta', { id: 'join', data: await Vault.sealJson(j, 'lb|join') }); } catch (e) {} }
-async function tryPendingJoin() {
-  if (!roomReady()) return;
-  let j = null; try { const r = await idb.get('meta', 'join'); if (r) j = await Vault.openJson(r.data, 'lb|join'); } catch (e) {}
-  if (!j) return;
-  try { const res = await joinRoom(j); if (res === 'later') return; await idb.del('meta', 'join').catch(() => {}); if (res === 'joined') { toast('You joined "' + spaceName(j.id) + '".'); setSpace(j.id); } }
-  catch (e) { await idb.del('meta', 'join').catch(() => {}); toast('Could not join the room: ' + errText(e)); }
+  return moved;
 }
