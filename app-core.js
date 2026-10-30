@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v12';
+const VERSION = 'v13';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -20,9 +20,14 @@ const fmtMonth = t => new Date(t).toLocaleDateString(undefined, { month: 'long',
 const monthKey = t => { const d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1); };
 const utf8 = s => new TextEncoder().encode(s);
 const errText = e => (e && (e.message || e.name)) || (e == null ? 'unknown error' : String(e));
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/heic', 'image/heif'];
-const safeType = t => IMAGE_TYPES.includes(String(t || '').toLowerCase()) ? String(t).toLowerCase() : 'application/octet-stream';      // a stored type is only ever one of these
-const extOf = t => ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic', 'image/heif': 'heif' }[t] || 'bin');
+const MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/heic', 'image/heif', 'video/mp4', 'video/quicktime', 'video/webm', 'video/3gpp', 'video/x-matroska'];
+const safeType = t => MEDIA_TYPES.includes(String(t || '').toLowerCase()) ? String(t).toLowerCase() : 'application/octet-stream';      // a stored type is only ever one of these
+const extOf = t => ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic', 'image/heif': 'heif', 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/3gpp': '3gp', 'video/x-matroska': 'mkv' }[t] || 'bin');
+// Videos are kept in pieces of CHUNK bytes, each sealed on its own (on the device, in the bucket and
+// in Drive): no phone has to hold a whole video twice to encrypt it, and no piece reaches the 50 MB
+// limit of a Supabase object. Photos stay one piece.
+const CHUNK = self.LB_TEST_CHUNK || 8 * 1048576, MAX_VIDEO = 300 * 1048576;
+const chunkKey = (id, i) => id + '#' + i;
 
 // ---------- one active instance ----------
 // Only one tab or window writes at a time. Whoever is active puts its id into localStorage, which
@@ -101,6 +106,16 @@ async function sealedPut(store, id, blob, aad) {
 const imgPut = (id, blob) => sealedPut('images', id, blob, imgLabel(id));
 async function imgGet(id, type) { const r = await idb.get('images', id); return r ? Vault.openBlob(r.data, imgLabel(id), type || 'image/jpeg') : null; }
 const imgHas = async id => !!(await idb.get('images', id));
+// the whole picture or video as one Blob (a video is put together from its pieces); null when a piece is missing
+async function mediaGet(p) {
+  if (p.kind !== 'video') return imgGet(p.id, p.type);
+  const parts = [];
+  for (let i = 0; i < p.chunks; i++) { const r = await idb.get('images', chunkKey(p.id, i)); if (!r) return null; parts.push(await Vault.openBlob(r.data, imgLabel(chunkKey(p.id, i)))); }
+  return new Blob(parts, { type: p.type });
+}
+// one piece of a video, decrypted (for the upload, one piece at a time)
+async function chunkGet(p, i) { const r = await idb.get('images', chunkKey(p.id, i)); return r ? Vault.openBlob(r.data, imgLabel(chunkKey(p.id, i))) : null; }
+const chunkPut = (id, i, blob) => sealedPut('images', chunkKey(id, i), blob, imgLabel(chunkKey(id, i)));
 const thumbPut = (id, blob) => sealedPut('thumbs', id, blob, thLabel(id));
 async function thumbGet(id) { const r = await idb.get('thumbs', id); return r ? Vault.openBlob(r.data, thLabel(id), 'image/jpeg') : null; }
 // After the local key was renewed: bring every stored record under the new key, one at a time,
@@ -163,7 +178,8 @@ async function resealAll() {
 // ---------- the photo list: one encrypted record; images and thumbnails live in their own records ----------
 /* One photo:
    id, name (file name), type, w, h, size (bytes of the original), taken_at (ms; from the picture's
-   EXIF date, else the file date), created_at (when it was added), folder, caption, star (one of
+   EXIF date or a video's own creation time, else the file date), kind ('' a photo, 'video'),
+   chunks (a video's number of pieces), dur (a video's length in seconds), created_at (when it was added), folder, caption, star (one of
    the best: the "Top" view shows only these), deleted,
    updated_at (last change of the fields above: the entry the cloud holds is sealed with it),
    folder ('' = no folder, else the id of the folder it lives in; a folder is a compartment with
@@ -182,13 +198,14 @@ const folderById = id => folders.find(f => f.id === id && !f.deleted);
 const folderName = id => { const f = folderById(id); return f ? f.name : ''; };
 const liveFolders = () => folders.filter(f => !f.deleted).sort((a, b) => a.name.localeCompare(b.name));
 const fsigOf = f => JSON.stringify([f.name, !!f.deleted]);
-const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, p.rot || 0, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '', p.pk || '']);      // where the files live and the wrapped key are part of the entry too
+const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, p.rot || 0, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '', (p.dfs || []).join(','), p.pk || '']);      // where the files live and the wrapped key are part of the entry too
 function migrate(p) {
   p.name = p.name == null ? '' : String(p.name); p.type = safeType(p.type); p.w = +p.w || 0; p.h = +p.h || 0; p.size = +p.size || 0;
   p.created_at = p.created_at || Date.now(); p.taken_at = p.taken_at || p.created_at; p.updated_at = p.updated_at || p.created_at;
   p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : ''; p.star = !!p.star; p.rot = [90, 180, 270].includes(+p.rot) ? +p.rot : 0;
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
   p.st = p.st === 'gd' ? 'gd' : 'sb'; p.df = p.df ? String(p.df) : ''; p.dt = p.dt ? String(p.dt) : '';
+  p.kind = p.kind === 'video' ? 'video' : ''; p.chunks = Math.max(0, Math.floor(+p.chunks || 0)); p.dur = +p.dur || 0; p.dfs = Array.isArray(p.dfs) ? p.dfs.map(String) : [];
   return p;
 }
 const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', folders: Array.isArray(v.folders) ? v.folders : [] } : { photos: [], cursors: {}, account: '', folders: [] };
@@ -247,6 +264,7 @@ const alive = () => photos.filter(p => !p.deleted).sort((a, b) => b.taken_at - a
 const byId = id => photos.find(p => p.id === id);
 async function purgePhotoData(p) {
   await idb.del('images', p.id).catch(() => {}); await idb.del('thumbs', p.id).catch(() => {});
+  for (let i = 0; i < (p.chunks || 0); i++) await idb.del('images', chunkKey(p.id, i)).catch(() => {});
   p.have = false; p.th = false; dropThumbUrl(p.id);
 }
 // a folder is made here: a new key, kept on this device; its row goes to the cloud with the next sync

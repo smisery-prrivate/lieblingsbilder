@@ -98,25 +98,91 @@ $('importInput').addEventListener('change', e => {
   e.target.value = ''; pickerOpen = false;
   addFiles(all, 'picked');
 });
-const isImage = f => /^image\//i.test(f.type) || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '');
+const isVideo = f => /^video\//i.test(f.type) || /\.(mp4|m4v|mov|webm|3gp|mkv)$/i.test(f.name || '');
+const isMedia = f => /^image\//i.test(f.type) || /\.(jpe?g|png|webp|gif|avif|heic|heif)$/i.test(f.name || '') || isVideo(f);
+const fileDate = f => f.lastModified > 0 && f.lastModified < Date.now() + 86400000 ? f.lastModified : Date.now();
+const videoType = f => { const t = safeType(f.type); if (/^video\//.test(t)) return t; const g = guessType(f.name); return /^video\//.test(g) ? g : 'video/mp4'; };
+const fmtDur = s => { s = Math.round(s || 0); return Math.floor(s / 60) + ':' + pad(s % 60); };
+// ---------- videos: the date from the file, a still for the tile, the pieces ----------
+// MP4 and QuickTime files carry their creation time in the "mvhd" box (seconds since 1904, UTC),
+// at the start or, as phones record it, near the end.
+async function mp4Created(f) {
+  const scan = async (start, end) => {
+    const u8 = new Uint8Array(await f.slice(start, end).arrayBuffer()), dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    for (let i = 4; i + 16 < u8.length; i++) {
+      if (u8[i] !== 0x6d || u8[i + 1] !== 0x76 || u8[i + 2] !== 0x68 || u8[i + 3] !== 0x64) continue;
+      const secs = u8[i + 4] === 1 ? Number(dv.getBigUint64(i + 8)) : dv.getUint32(i + 8), t = (secs - 2082844800) * 1000;
+      return t > Date.UTC(2000, 0, 1) && t < Date.now() + 864e5 ? t : 0;
+    }
+    return 0;
+  };
+  try { return (await scan(0, Math.min(f.size, 1048576))) || (f.size > 1048576 ? await scan(Math.max(0, f.size - 4194304), f.size) : 0); } catch (e) { return 0; }
+}
+// a still from the video (half a second in), as a small JPEG like a photo's thumbnail; null when this browser cannot play it
+function videoPoster(blob) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(blob), v = document.createElement('video'); let done = false;
+    const fin = r => { if (done) return; done = true; clearTimeout(to); try { v.removeAttribute('src'); v.load(); } catch (e) {} URL.revokeObjectURL(url); resolve(r); };
+    const to = setTimeout(() => fin(null), 10000);
+    const grab = async () => {
+      try {
+        const w = v.videoWidth, h = v.videoHeight; if (!w || !h) { fin(null); return; }
+        const s = Math.min(1, THUMB / Math.max(w, h)), cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(w * s)); cv.height = Math.max(1, Math.round(h * s));
+        cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+        fin({ blob: await toJpeg(cv, 0.82), w, h, dur: isFinite(v.duration) ? v.duration : 0 });
+      } catch (e) { fin(null); }
+    };
+    v.muted = true; v.playsInline = true; v.preload = 'auto';
+    v.addEventListener('loadeddata', () => { const d = v.duration; if (isFinite(d) && d > 1) { v.addEventListener('seeked', grab, { once: true }); v.currentTime = Math.min(0.5, d / 4); } else grab(); }, { once: true });
+    v.addEventListener('error', () => fin(null), { once: true });
+    v.src = url;
+  });
+}
+// a video goes into the encrypted store piece by piece, straight from the file the picker handed over
+async function storeVideo(f, id) {
+  const taken = await mp4Created(f), poster = await videoPoster(f).catch(() => null), n = Math.max(1, Math.ceil(f.size / CHUNK));
+  try { for (let i = 0; i < n; i++) await chunkPut(id, i, f.slice(i * CHUNK, Math.min(f.size, (i + 1) * CHUNK))); }
+  catch (e) { for (let i = 0; i < n; i++) await idb.del('images', chunkKey(id, i)).catch(() => {}); throw e; }
+  return { taken, poster, dur: poster ? poster.dur : 0, chunks: n };
+}
 // Every picture is stored as it is (the original bytes, nothing re-encoded), with a thumbnail and
 // the date it was taken. One picture that fails does not hold up the others.
 function addFiles(all, source) {
-  const files = all.filter(isImage);
-  if (all.length && !files.length) { toast(all.length === 1 ? 'That file is not a picture.' : 'None of those files is a picture.'); return; }
+  const files = all.filter(isMedia);
+  if (all.length && !files.length) { toast(all.length === 1 ? 'That file is not a picture or a video.' : 'None of those files is a picture or a video.'); return; }
   if (!files.length || passive || !Vault.isOpen()) return;      // under a soft lock the vault is still open: pictures from the picker are stored, then the page restarts
   const intoFolder = folderFilter && folderById(folderFilter) ? folderFilter : '';      // added while a folder is open: it goes in there
-  const res = { n: 0, dated: 0, undated: 0, big: 0, undecoded: 0, failed: 0, why: '' };
+  const res = { n: 0, v: 0, dated: 0, undated: 0, big: 0, bigv: 0, undecoded: 0, failed: 0, why: '' };
   // The bytes are read right now, all at once: a file handed over by the picker can stop being
   // readable while it waits behind others (Android, pictures a cloud gallery fetches on demand).
-  const reads = files.map(f => f.size + 4096 > MAX_FILE ? null : f.arrayBuffer().catch(e => (e instanceof Error ? e : new Error(String(e)))));
+  // A video is stored piece by piece right away (one video after the other, so a phone never holds two).
+  const ids = files.map(() => uid()), asErr = e => (e instanceof Error ? e : new Error(String(e)));
+  let vchain = Promise.resolve();
+  const reads = files.map((f, i) => {
+    if (isVideo(f)) { if (f.size > MAX_VIDEO) return null; const job = vchain.then(() => storeVideo(f, ids[i])).catch(asErr); vchain = job; return job; }
+    return f.size + 4096 > MAX_FILE ? null : f.arrayBuffer().catch(asErr);
+  });
   files.forEach((f0, i) => queue(async () => {
     if (passive || !Vault.isOpen()) return;
+    if (isVideo(f0)) {
+      if (f0.size > MAX_VIDEO) { res.bigv++; return; }
+      try {
+        const got = await reads[i]; if (got instanceof Error) throw new Error('the video could not be read from the gallery (' + errText(got) + ')');
+        const id = ids[i], now = Date.now();
+        if (got.poster) await thumbPut(id, got.poster.blob);
+        const p = migrate({ id, name: f0.name || '', type: videoType(f0), kind: 'video', chunks: got.chunks, dur: got.dur, w: got.poster ? got.poster.w : 0, h: got.poster ? got.poster.h : 0, size: f0.size,
+          taken_at: got.taken || fileDate(f0), created_at: now, updated_at: now, folder: intoFolder, caption: '', deleted: false, have: true, th: !!got.poster, up: false, tag: '', srv: 0, seen: 0 });
+        photos.unshift(p); snap[p.id] = sigOf(p);
+        res.v++; if (got.taken) res.dated++; else res.undated++; if (!got.poster) res.undecoded++;
+        save(); renderHome();
+      } catch (e) { res.failed++; if (!res.why) res.why = errText(e); }
+      return;
+    }
     if (f0.size + 4096 > MAX_FILE) { res.big++; return; }
     try {
       const buf = await reads[i]; if (buf instanceof Error) throw new Error('the picture could not be read from the gallery (' + errText(buf) + ')');
       const f = new File([buf], f0.name || '', { type: f0.type, lastModified: f0.lastModified });
-      const id = uid(), ex = await exifInfo(f), t = await makeThumb(f);
+      const id = ids[i], ex = await exifInfo(f), t = await makeThumb(f);
       const taken = ex.taken || (f.lastModified > 0 && f.lastModified < Date.now() + 86400000 ? f.lastModified : Date.now());
       await imgPut(id, f);
       if (t) await thumbPut(id, t.blob);
@@ -130,16 +196,18 @@ function addFiles(all, source) {
   }));
   queue(async () => {
     const parts = [];
-    if (res.n) parts.push(res.n === 1 ? '1 photo added' : res.n + ' photos added');
-    if (res.undated) parts.push(res.undated === 1 ? '1 without a date in the picture: the file date was used (tap it to change the date)' : res.undated + ' without a date in the picture: the file date was used');
+    const added = [res.n ? (res.n === 1 ? '1 photo' : res.n + ' photos') : '', res.v ? (res.v === 1 ? '1 video' : res.v + ' videos') : ''].filter(Boolean).join(' and ');
+    if (added) parts.push(added + ' added');
+    if (res.undated) parts.push(res.undated === 1 ? '1 without a date of its own: the file date was used (tap it to change the date)' : res.undated + ' without a date of their own: the file date was used');
     if (res.undecoded) parts.push(res.undecoded === 1 ? '1 cannot be displayed by this browser; it is stored as it is' : res.undecoded + ' cannot be displayed by this browser; they are stored as they are');
+    if (res.bigv) parts.push(res.bigv === 1 ? '1 video is larger than 300 MB and was skipped' : res.bigv + ' videos are larger than 300 MB and were skipped');
     if (res.big) parts.push(res.big === 1 ? '1 file is larger than 50 MB and was skipped' : res.big + ' files are larger than 50 MB and were skipped');
     if (res.failed) parts.push((res.failed === 1 ? '1 could not be stored' : res.failed + ' could not be stored') + (res.why ? ': ' + res.why : ''));
     if (parts.length) toast(parts.join(' · ') + '.');
-    if (source === 'shared' && res.n && current() === 'home') { const first = photos.find(p => !p.deleted); if (first) scrollToMonth(monthKey(first.taken_at)); }
+    if (source === 'shared' && (res.n || res.v) && current() === 'home') { const first = photos.find(p => !p.deleted); if (first) scrollToMonth(monthKey(first.taken_at)); }
   });
 }
-const guessType = name => ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif' })[(String(name || '').split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
+const guessType = name => ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif', mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp', mkv: 'video/x-matroska' })[(String(name || '').split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
 // Pictures handed over by the share sheet wait in the parking slot (see sw.js) until the app is
 // open and the vault is unlocked. They are taken over here, stored encrypted, and the slot is cleared.
 async function takeShared() {
@@ -237,7 +305,7 @@ function renderHome() {
       grid = sec.querySelector('.grid'); frag.appendChild(sec);
     }
     const el = document.createElement('div'); el.className = 'tile' + (selected.has(p.id) ? ' sel' : ''); el.dataset.id = p.id;
-    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + '<button class="starbtn' + (p.star ? ' on' : '') + '" title="' + (p.star ? 'Remove the star' : 'Mark as top') + '" aria-label="Star">' + (p.star ? '★' : '☆') + '</button>';
+    el.innerHTML = '<div class="wait">' + (thumbUrls.has(p.id) ? '' : '…') + '</div><div class="tick"></div>' + (!p.have && !selectMode ? '<span class="cl" title="Only in the cloud so far">☁</span>' : '') + (p.kind === 'video' ? '<span class="vid">▶' + (p.dur ? ' ' + fmtDur(p.dur) : '') + '</span>' : '') + '<button class="starbtn' + (p.star ? ' on' : '') + '" title="' + (p.star ? 'Remove the star' : 'Mark as top') + '" aria-label="Star">' + (p.star ? '★' : '☆') + '</button>';
     if (thumbUrls.has(p.id)) { const img = new Image(); img.alt = ''; img.src = thumbUrls.get(p.id); if (p.rot) img.style.transform = 'rotate(' + p.rot + 'deg)'; el.replaceChild(img, el.firstChild); }
     else if (io) io.observe(el); else fillTile(el);
     tileEvents(el, p);
@@ -315,7 +383,7 @@ function scrollToMonth(k) { const el = $('list').querySelector('.month[data-mont
 // ---------- the full picture: from this device, or fetched from the cloud and kept ----------
 let selBusy = false;
 async function fullBlob(p, msg) {
-  if (p.have) { const b = await imgGet(p.id, p.type); if (b) return b; p.have = false; persist(); }
+  if (p.have) { const b = await mediaGet(p); if (b) return b; p.have = false; persist(); }
   if (!haveKeyFor(p)) throw new Error(session ? (p.folder ? 'The key of this folder is not on this device yet.' : 'The encryption password is needed first (menu).') : 'This photo is only in the cloud. Sign in through the menu to fetch it.');
   if (typeof fetchFull !== 'function') throw new Error('not available');
   return fetchFull(p, msg);
@@ -324,7 +392,7 @@ async function fullBlob(p, msg) {
 // (a picture this browser cannot draw leaves as it is)
 async function outFile(p, msg) {
   const blob = await fullBlob(p, msg);
-  if (!p.rot) return fileOf(p, blob);
+  if (!p.rot || p.kind === 'video') return fileOf(p, blob);      // a video leaves as it was recorded
   let im; try { im = await decodeImage(blob); } catch (e) { return fileOf(p, blob); }
   try {
     const { w, h } = dims(im), q = p.rot % 180 !== 0, cv = document.createElement('canvas');
@@ -408,23 +476,30 @@ function dateSheet(p) {
 
 // ---------- viewer ----------
 function openView(p) { if (locked || passive) return; curPhoto = p; viewList = visible(); push('view'); renderView(); }
-function leaveView() { drag = null; animating = false; $('viewImg').style.opacity = ''; $('viewImg').style.transform = ''; curPhoto = null; viewList = []; if (viewUrl) URL.revokeObjectURL(viewUrl); viewUrl = ''; viewThumbUrl = ''; $('viewImg').removeAttribute('src'); viewSeq++; }
+function leaveView() { drag = null; animating = false; for (const el of [$('viewImg'), $('viewVid')]) { el.style.opacity = ''; el.style.transform = ''; } stopVid(); curPhoto = null; viewList = []; if (viewUrl) URL.revokeObjectURL(viewUrl); viewUrl = ''; viewThumbUrl = ''; $('viewImg').removeAttribute('src'); viewSeq++; }
 async function renderView() {
   const p = curPhoto; if (!p || p.deleted) { if (current() === 'view') closeView(); return; }
-  const my = ++viewSeq, img = $('viewImg'), msg = $('viewMsg');
+  const my = ++viewSeq, img = $('viewImg'), msg = $('viewMsg'), video = p.kind === 'video', vid = $('viewVid');
+  stopVid(); img.hidden = video; vid.hidden = !video; vid.removeAttribute('poster');
   const at = viewList.indexOf(p);
   $('viewPrev').hidden = at <= 0; $('viewNext').hidden = at < 0 || at >= viewList.length - 1;
   for (const n of [viewList[at - 1], viewList[at + 1]]) if (n) thumbUrl(n).catch(() => {});      // the neighbours' small pictures ready for the swipe
-  $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([viewList.length > 1 && at >= 0 ? (at + 1) + ' / ' + viewList.length : '', folderName(p.folder), p.name, p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
+  $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([viewList.length > 1 && at >= 0 ? (at + 1) + ' / ' + viewList.length : '', folderName(p.folder), p.name, video && p.dur ? fmtDur(p.dur) : '', p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
   $('viewStar').innerHTML = '<span>' + (p.star ? '★' : '☆') + '</span>' + (p.star ? 'Top' : 'Star'); $('viewStar').classList.toggle('on', !!p.star);
   if (viewUrl) { URL.revokeObjectURL(viewUrl); viewUrl = ''; }
   const tu = await thumbUrl(p); if (my !== viewSeq) return;
-  if (tu) { img.src = tu; viewThumbUrl = tu; fitView(); } else img.removeAttribute('src');
-  msg.hidden = false; msg.textContent = p.have ? '' : haveKeyFor(p) ? 'Fetching the full picture…' : session ? 'The key of this folder is not on this device yet.' : 'Only the small picture is on this device. Sign in through the menu to fetch the full one.';
+  if (video) { if (tu) vid.poster = tu; fitView(); }
+  else if (tu) { img.src = tu; viewThumbUrl = tu; fitView(); } else img.removeAttribute('src');
+  msg.hidden = false; msg.textContent = p.have ? '' : haveKeyFor(p) ? (video ? 'Fetching the video…' : 'Fetching the full picture…') : session ? 'The key of this folder is not on this device yet.' : 'Only the small picture is on this device. Sign in through the menu to fetch the full one.';
   if (!p.have && !haveKeyFor(p)) return;
   try {
     const b = await fullBlob(p); if (my !== viewSeq) return;
     const u = URL.createObjectURL(b);
+    if (video) {
+      if (my !== viewSeq) { URL.revokeObjectURL(u); return; }
+      viewUrl = u; vid.onerror = () => { if (my === viewSeq) { msg.hidden = false; msg.textContent = 'This browser cannot play this kind of video (' + extOf(p.type).toUpperCase() + '). Share or save it to open it elsewhere.'; } };
+      vid.src = u; msg.hidden = true; fitView(); renderHome(); return;
+    }
     const test = new Image(); test.src = u;
     try { await test.decode(); } catch (e) { URL.revokeObjectURL(u); msg.textContent = 'This browser cannot display this kind of picture (' + extOf(p.type).toUpperCase() + '). Share or save it to open it elsewhere.'; return; }
     if (my !== viewSeq) { URL.revokeObjectURL(u); return; }
@@ -444,18 +519,21 @@ function stepView(dir) {
 // the picture slides out and the next one slides in; at either end it only gives a little.
 const stage = $('viewStage');
 let drag = null, lastTap = 0, animating = false;
-function imgTransform(dx) { const r = (curPhoto && curPhoto.rot) || 0; $('viewImg').style.transform = (dx ? 'translateX(' + dx + 'px) ' : '') + (r ? 'rotate(' + r + 'deg)' : ''); }
+const viewEl = () => (curPhoto && curPhoto.kind === 'video') ? $('viewVid') : $('viewImg');
+function stopVid() { const v = $('viewVid'); try { v.pause(); } catch (e) {} if (v.getAttribute('src')) { v.removeAttribute('src'); try { v.load(); } catch (e) {} } }
+function imgTransform(dx) { const r = (curPhoto && curPhoto.rot) || 0; viewEl().style.transform = (dx ? 'translateX(' + dx + 'px) ' : '') + (r ? 'rotate(' + r + 'deg)' : ''); }
 const neighbour = dir => { const i = viewList.indexOf(curPhoto); return i < 0 ? null : viewList[i + dir] || null; };
 stage.addEventListener('pointerdown', e => {
   if (!e.isPrimary || animating || e.target.closest('button')) return;
-  drag = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, h: null, id: e.pointerId };
-  try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+  const onVid = e.target === $('viewVid');      // the player keeps its own taps (play, the timeline): no capture there
+  drag = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, h: null, id: e.pointerId, vid: onVid };
+  if (!onVid) { try { stage.setPointerCapture(e.pointerId); } catch (err) {} }
 });
 stage.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.id) return;
   drag.dx = e.clientX - drag.x; drag.dy = e.clientY - drag.y;
   if (!drag.h && Math.abs(drag.dx) > 12 && Math.abs(drag.dx) > Math.abs(drag.dy) * 0.7) drag.h = true;      // up and down mean nothing here: a swipe that starts a little slanted still turns sideways
-  if (drag.h) { const img = $('viewImg'); img.style.transition = 'none'; imgTransform(neighbour(drag.dx < 0 ? 1 : -1) ? drag.dx : drag.dx / 3); }
+  if (drag.h) { viewEl().style.transition = 'none'; imgTransform(neighbour(drag.dx < 0 ? 1 : -1) ? drag.dx : drag.dx / 3); }
 });
 stage.addEventListener('pointerup', e => {
   if (!drag || e.pointerId !== drag.id) return;
@@ -465,7 +543,7 @@ stage.addEventListener('pointerup', e => {
     if (neighbour(dir) && (Math.abs(d.dx) > stage.clientWidth * 0.2 || (v > 0.35 && Math.abs(d.dx) > 20))) slideTo(dir); else snapBack();
     lastTap = 0; return;
   }
-  if (Math.abs(d.dx) > 12 || Math.abs(d.dy) > 12) { lastTap = 0; return; }
+  if (Math.abs(d.dx) > 12 || Math.abs(d.dy) > 12 || d.vid) { lastTap = 0; return; }
   const now = Date.now();
   if (now - lastTap < 350) { lastTap = 0; if (curPhoto) { swallowClick = Date.now() + 600; folderSheet([curPhoto]); } } else lastTap = now;      // two taps on the picture: the folder menu
 });
@@ -473,17 +551,19 @@ stage.addEventListener('pointerup', e => {
 let swallowClick = 0;
 document.addEventListener('click', e => { if (Date.now() < swallowClick && e.target === $('sheet')) { swallowClick = 0; e.stopPropagation(); e.preventDefault(); } }, true);
 stage.addEventListener('pointercancel', () => { if (drag) { drag = null; snapBack(); } });
-function snapBack() { const img = $('viewImg'); img.style.transition = 'transform .2s ease'; imgTransform(0); }
+function snapBack() { viewEl().style.transition = 'transform .2s ease'; imgTransform(0); }
 function slideTo(dir) {
   if (animating || !neighbour(dir)) return;
-  const img = $('viewImg'), w = stage.clientWidth; animating = true;
-  img.style.transition = 'transform .16s ease-in, opacity .16s ease-in'; imgTransform(-dir * w); img.style.opacity = '0';
+  const out = viewEl(), w = stage.clientWidth; animating = true;
+  out.style.transition = 'transform .16s ease-in, opacity .16s ease-in'; imgTransform(-dir * w); out.style.opacity = '0';
   setTimeout(() => {
     stepView(dir);
-    const tu = curPhoto && thumbUrls.get(curPhoto.id); if (tu) img.src = tu;      // the next picture at once, never the old one sliding back in
-    img.style.transition = 'none'; imgTransform(dir * w * 0.35); img.style.opacity = '0';
-    void img.offsetWidth;
-    img.style.transition = 'transform .2s ease-out, opacity .2s ease-out'; imgTransform(0); img.style.opacity = '1';
+    const el = viewEl(), tu = curPhoto && thumbUrls.get(curPhoto.id);
+    if (el !== out) { out.style.transition = 'none'; out.style.transform = ''; out.style.opacity = ''; }
+    if (tu) { if (el === $('viewVid')) el.poster = tu; else el.src = tu; }      // the next picture at once, never the old one sliding back in
+    el.style.transition = 'none'; imgTransform(dir * w * 0.35); el.style.opacity = '0';
+    void el.offsetWidth;
+    el.style.transition = 'transform .2s ease-out, opacity .2s ease-out'; imgTransform(0); el.style.opacity = '1';
     setTimeout(() => { animating = false; fitView(); }, 220);
   }, 160);
 }
@@ -503,15 +583,16 @@ $('viewStar').addEventListener('click', () => { const p = curPhoto; if (!p) retu
 $('viewRot').addEventListener('click', () => { const p = curPhoto; if (!p) return; p.rot = ((p.rot || 0) + 90) % 360; save(); fitView(); renderHome(); });
 // the picture in the viewer, turned and fitted into the stage
 function fitView() {
-  const p = curPhoto, img = $('viewImg'); if (!p) return;
+  const p = curPhoto, img = viewEl(); if (!p) return;
   const r = p.rot || 0, st = $('viewStage').getBoundingClientRect();
-  const w = img.naturalWidth || p.w || 1, h = img.naturalHeight || p.h || 1, q = r % 180 !== 0;
+  const w = img.naturalWidth || img.videoWidth || p.w || 16, h = img.naturalHeight || img.videoHeight || p.h || 9, q = r % 180 !== 0;
   const s = Math.min(st.width / (q ? h : w), st.height / (q ? w : h));
   img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
   img.style.width = Math.round(w * s) + 'px'; img.style.height = Math.round(h * s) + 'px';
   if (!animating && !drag) imgTransform(0);      // a slide under way keeps its own movement
 }
 $('viewImg').addEventListener('load', fitView);
+$('viewVid').addEventListener('loadedmetadata', fitView);
 window.addEventListener('resize', () => { if (current() === 'view') fitView(); });
 $('viewDate').addEventListener('click', () => { if (curPhoto) dateSheet(curPhoto); });
 $('viewFolder').addEventListener('click', () => { if (curPhoto) folderSheet([curPhoto]); });

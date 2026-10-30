@@ -7,7 +7,7 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
 
 ## What it does
 
-- **Add.** The big plus opens the phone's gallery (several pictures at once). On Android the app also
+- **Add.** The big plus opens the phone's gallery (several pictures and videos at once). On Android the app also
   appears in the share sheet of the gallery and of any other app ("Share → Lieblingsbilder"). The
   picture is stored exactly as it is: the original bytes, nothing re-encoded. iPhones do not offer
   the share sheet to web apps; there the plus is the way in.
@@ -177,6 +177,12 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v13 (2026-10-30): videos. Up to 300 MB each, kept in pieces of 8 MB, each piece sealed on its
+  own with the video's key (on the device, as bucket objects `<id>.<tag>.<n>`, or as Drive files),
+  so no phone holds a whole video twice to encrypt it and no piece reaches a 50 MB object limit.
+  The date comes from the file's own creation time ("mvhd"), the tile shows a still with ▶ and the
+  length, the viewer plays it (swiping still works; taps belong to the player). A shared video
+  leaves as it was recorded; a turn is shown but not burnt in.
 - v12 (2026-10-30): swiping in the viewer follows the finger, takes quick flicks, and is no longer
   taken over by the browser when it starts slanted; the position ("3 / 12") in the title.
 - v11 (2026-10-29): Rotate in the viewer: a quarter turn per tap, stored as an angle in the sealed

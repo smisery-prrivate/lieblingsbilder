@@ -199,7 +199,7 @@ async function housekeeping() {
     const live = new Set(photos.filter(p => !p.deleted).map(p => p.id)), old = Date.now() - 3600000;
     for (const st of ['images', 'thumbs']) for (const id of await idb.keys(st)) {
       if (!idle()) return;
-      if (live.has(id)) continue;
+      if (live.has(String(id).split('#')[0])) continue;      // a video's pieces belong to it
       const r = await idb.get(st, id); if (r && (!r.t || r.t < old) && idle() && !live.has(id)) await idb.del(st, id);
     }
     for (const r of await idb.all('shared')) { if (!idle()) return; if (r && r.t && r.t < Date.now() - 864e5) await idb.del('shared', r.id); }      // a parked picture nobody took within a day
