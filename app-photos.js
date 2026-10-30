@@ -408,11 +408,14 @@ function dateSheet(p) {
 
 // ---------- viewer ----------
 function openView(p) { if (locked || passive) return; curPhoto = p; viewList = visible(); push('view'); renderView(); }
-function leaveView() { curPhoto = null; viewList = []; if (viewUrl) URL.revokeObjectURL(viewUrl); viewUrl = ''; viewThumbUrl = ''; $('viewImg').removeAttribute('src'); viewSeq++; }
+function leaveView() { drag = null; animating = false; $('viewImg').style.opacity = ''; $('viewImg').style.transform = ''; curPhoto = null; viewList = []; if (viewUrl) URL.revokeObjectURL(viewUrl); viewUrl = ''; viewThumbUrl = ''; $('viewImg').removeAttribute('src'); viewSeq++; }
 async function renderView() {
   const p = curPhoto; if (!p || p.deleted) { if (current() === 'view') closeView(); return; }
   const my = ++viewSeq, img = $('viewImg'), msg = $('viewMsg');
-  $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([folderName(p.folder), p.name, p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
+  const at = viewList.indexOf(p);
+  $('viewPrev').hidden = at <= 0; $('viewNext').hidden = at < 0 || at >= viewList.length - 1;
+  for (const n of [viewList[at - 1], viewList[at + 1]]) if (n) thumbUrl(n).catch(() => {});      // the neighbours' small pictures ready for the swipe
+  $('viewTitle').innerHTML = esc(fmtDateTime(p.taken_at)) + '<small>' + esc([viewList.length > 1 && at >= 0 ? (at + 1) + ' / ' + viewList.length : '', folderName(p.folder), p.name, p.w && p.h ? p.w + '×' + p.h : '', p.size ? fmtSize(p.size) : ''].filter(Boolean).join(' · ')) + '</small>';
   $('viewStar').innerHTML = '<span>' + (p.star ? '★' : '☆') + '</span>' + (p.star ? 'Top' : 'Star'); $('viewStar').classList.toggle('on', !!p.star);
   if (viewUrl) { URL.revokeObjectURL(viewUrl); viewUrl = ''; }
   const tu = await thumbUrl(p); if (my !== viewSeq) return;
@@ -435,18 +438,58 @@ function stepView(dir) {
   if (!n) return;
   curPhoto = n; if (viewUrl) URL.revokeObjectURL(viewUrl); viewUrl = ''; renderView();
 }
-let swipeX = null, swipeY = null, lastTap = 0;
-$('viewStage').addEventListener('pointerdown', e => { if (e.isPrimary) { swipeX = e.clientX; swipeY = e.clientY; } });
-$('viewStage').addEventListener('pointerup', e => {
-  if (swipeX == null) return;
-  const dx = e.clientX - swipeX, dy = e.clientY - swipeY; swipeX = swipeY = null;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { stepView(dx < 0 ? 1 : -1); lastTap = 0; return; }
-  if (Math.abs(dx) > 12 || Math.abs(dy) > 12) { lastTap = 0; return; }
-  const now = Date.now();
-  if (now - lastTap < 350) { lastTap = 0; if (curPhoto) folderSheet([curPhoto]); } else lastTap = now;      // two taps on the picture: the folder menu
+// ---------- swiping between photos: the picture follows the finger ----------
+// The stage takes every touch itself (touch-action: none), so a swipe that starts a little slanted
+// is not taken over by the browser. Far enough (a fifth of the width) or fast enough (a flick):
+// the picture slides out and the next one slides in; at either end it only gives a little.
+const stage = $('viewStage');
+let drag = null, lastTap = 0, animating = false;
+function imgTransform(dx) { const r = (curPhoto && curPhoto.rot) || 0; $('viewImg').style.transform = (dx ? 'translateX(' + dx + 'px) ' : '') + (r ? 'rotate(' + r + 'deg)' : ''); }
+const neighbour = dir => { const i = viewList.indexOf(curPhoto); return i < 0 ? null : viewList[i + dir] || null; };
+stage.addEventListener('pointerdown', e => {
+  if (!e.isPrimary || animating || e.target.closest('button')) return;
+  drag = { x: e.clientX, y: e.clientY, t: performance.now(), dx: 0, dy: 0, h: null, id: e.pointerId };
+  try { stage.setPointerCapture(e.pointerId); } catch (err) {}
 });
-$('viewStage').addEventListener('pointercancel', () => { swipeX = swipeY = null; });
-document.addEventListener('keydown', e => { if (current() !== 'view' || locked || stack[stack.length - 1] !== 'view') return; if (e.key === 'ArrowRight') stepView(1); else if (e.key === 'ArrowLeft') stepView(-1); else if (e.key === 'Escape') back(); });
+stage.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.dx = e.clientX - drag.x; drag.dy = e.clientY - drag.y;
+  if (!drag.h && Math.abs(drag.dx) > 12 && Math.abs(drag.dx) > Math.abs(drag.dy) * 0.7) drag.h = true;      // up and down mean nothing here: a swipe that starts a little slanted still turns sideways
+  if (drag.h) { const img = $('viewImg'); img.style.transition = 'none'; imgTransform(neighbour(drag.dx < 0 ? 1 : -1) ? drag.dx : drag.dx / 3); }
+});
+stage.addEventListener('pointerup', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const d = drag; drag = null;
+  if (d.h) {
+    const dir = d.dx < 0 ? 1 : -1, v = Math.abs(d.dx) / Math.max(1, performance.now() - d.t);
+    if (neighbour(dir) && (Math.abs(d.dx) > stage.clientWidth * 0.2 || (v > 0.35 && Math.abs(d.dx) > 20))) slideTo(dir); else snapBack();
+    lastTap = 0; return;
+  }
+  if (Math.abs(d.dx) > 12 || Math.abs(d.dy) > 12) { lastTap = 0; return; }
+  const now = Date.now();
+  if (now - lastTap < 350) { lastTap = 0; if (curPhoto) { swallowClick = Date.now() + 600; folderSheet([curPhoto]); } } else lastTap = now;      // two taps on the picture: the folder menu
+});
+// the click that belongs to the second tap would land on the sheet that has just opened under the finger and close it again
+let swallowClick = 0;
+document.addEventListener('click', e => { if (Date.now() < swallowClick && e.target === $('sheet')) { swallowClick = 0; e.stopPropagation(); e.preventDefault(); } }, true);
+stage.addEventListener('pointercancel', () => { if (drag) { drag = null; snapBack(); } });
+function snapBack() { const img = $('viewImg'); img.style.transition = 'transform .2s ease'; imgTransform(0); }
+function slideTo(dir) {
+  if (animating || !neighbour(dir)) return;
+  const img = $('viewImg'), w = stage.clientWidth; animating = true;
+  img.style.transition = 'transform .16s ease-in, opacity .16s ease-in'; imgTransform(-dir * w); img.style.opacity = '0';
+  setTimeout(() => {
+    stepView(dir);
+    const tu = curPhoto && thumbUrls.get(curPhoto.id); if (tu) img.src = tu;      // the next picture at once, never the old one sliding back in
+    img.style.transition = 'none'; imgTransform(dir * w * 0.35); img.style.opacity = '0';
+    void img.offsetWidth;
+    img.style.transition = 'transform .2s ease-out, opacity .2s ease-out'; imgTransform(0); img.style.opacity = '1';
+    setTimeout(() => { animating = false; fitView(); }, 220);
+  }, 160);
+}
+$('viewPrev').addEventListener('click', () => slideTo(-1));
+$('viewNext').addEventListener('click', () => slideTo(1));
+document.addEventListener('keydown', e => { if (current() !== 'view' || locked || stack[stack.length - 1] !== 'view') return; if (e.key === 'ArrowRight') slideTo(1); else if (e.key === 'ArrowLeft') slideTo(-1); else if (e.key === 'Escape') back(); });
 $('viewBack').addEventListener('click', back);
 let viewSharing = false;
 $('viewShare').addEventListener('click', async () => {
@@ -466,7 +509,7 @@ function fitView() {
   const s = Math.min(st.width / (q ? h : w), st.height / (q ? w : h));
   img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
   img.style.width = Math.round(w * s) + 'px'; img.style.height = Math.round(h * s) + 'px';
-  img.style.transform = r ? 'rotate(' + r + 'deg)' : '';
+  if (!animating && !drag) imgTransform(0);      // a slide under way keeps its own movement
 }
 $('viewImg').addEventListener('load', fitView);
 window.addEventListener('resize', () => { if (current() === 'view') fitView(); });

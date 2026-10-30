@@ -104,8 +104,11 @@
   #view .top .icon:active { background: rgba(255,255,255,.15); }
   #view .title { flex: 1; text-align: center; font-size: 15px; line-height: 1.3; }
   #view .title small { display: block; font-size: 12px; color: #bbb; }
-  #view .stage { position: relative; flex: 1; width: 100%; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: pan-y pinch-zoom; }
-  #viewImg { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform .2s ease; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; pointer-events: none; -webkit-user-drag: none; }
+  #view .stage { position: relative; flex: 1; width: 100%; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
+  .vnav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; border: none; border-radius: 12px; background: rgba(255,255,255,.12); color: #fff; font-size: 30px; display: none; z-index: 2; }
+  .vnav.prev { left: 8px; } .vnav.next { right: 8px; }
+  @media (hover: hover) and (pointer: fine) { .vnav { display: block; } .vnav[hidden] { display: none !important; } }      /* arrows only with a mouse; a finger swipes */
+  #viewImg { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform .2s ease; will-change: transform; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; pointer-events: none; -webkit-user-drag: none; }
   #viewMsg { position: absolute; left: 0; right: 0; bottom: 10px; text-align: center; font-size: 13px; color: #ccc; pointer-events: none; }
   .vbar { width: 100%; display: flex; justify-content: space-around; padding: 8px 6px calc(env(safe-area-inset-bottom) + 16px); }
   .vbar button { background: none; border: none; color: #fff; font-size: 13px; font-weight: 600; padding: 10px 4px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 52px; }
@@ -207,6 +210,8 @@
   </header>
   <div class="stage" id="viewStage">
     <img id="viewImg" alt="">
+    <button id="viewPrev" class="vnav prev" aria-label="Previous photo">‹</button>
+    <button id="viewNext" class="vnav next" aria-label="Next photo">›</button>
     <div id="viewMsg" hidden></div>
   </div>
   <div class="vbar">

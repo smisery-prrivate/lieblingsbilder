@@ -21,7 +21,9 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   the existing folders as chips, a field for a new one, "No folder", and "Select several…",
   which turns the grid into a pick list (share, star, folder or delete several photos), as does
   the *Select* button. One tap on a chip moves the photo.
-- **Viewer.** Swipe between photos; a double tap on the picture opens the folder menu; Share (the
+- **Viewer.** Swipe between photos: the picture follows the finger and slides out, the next one slides
+  in (a fifth of the width or a quick flick is enough; at either end it only gives a little), "3 / 12"
+  in the title, arrows with a mouse; a double tap on the picture opens the folder menu; Share (the
   system share sheet with the original file, a download on the PC), Star, Rotate, Date, Folder, Delete;
   `⋯` for caption, details and "Save to this device". Folders are views on the same photos:
   "All" always shows everything.
@@ -175,6 +177,8 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v12 (2026-10-30): swiping in the viewer follows the finger, takes quick flicks, and is no longer
+  taken over by the browser when it starts slanted; the position ("3 / 12") in the title.
 - v11 (2026-10-29): Rotate in the viewer: a quarter turn per tap, stored as an angle in the sealed
   entry (the picture stays as it is, nothing is uploaded again), shown on the tile, in the viewer and
   in the collage; a shared or saved photo leaves as a JPEG turned the same way. No text selection
