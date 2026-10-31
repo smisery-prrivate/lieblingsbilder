@@ -210,10 +210,16 @@ function addFiles(all, source) {
 const guessType = name => ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif', mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', '3gp': 'video/3gpp', mkv: 'video/x-matroska' })[(String(name || '').split('.').pop() || '').toLowerCase()] || 'application/octet-stream';
 // Pictures handed over by the share sheet wait in the parking slot (see sw.js) until the app is
 // open and the vault is unlocked. They are taken over here, stored encrypted, and the slot is cleared.
-async function takeShared() {
-  if (passive || locked || !Vault.isOpen()) return;
-  let recs = []; try { recs = await idb.all('shared'); } catch (e) { return; }
+// Three things start the takeover: the start, the unlock and the app coming back to the front. Two
+// at once once stored the same parked picture twice; now one runs at a time, a parked picture is
+// claimed before it is stored, and nothing is taken before the photo list has been read.
+let sharedTaking = null; const sharedClaimed = new Set();
+function takeShared() { if (!sharedTaking) sharedTaking = takeShared0().finally(() => { sharedTaking = null; }); return sharedTaking; }
+async function takeShared0() {
+  if (passive || locked || !Vault.isOpen() || !photosLoaded) return;
+  let recs = []; try { recs = (await idb.all('shared')).filter(r => r && !sharedClaimed.has(r.id)); } catch (e) { return; }
   if (!recs.length) return;
+  for (const r of recs) sharedClaimed.add(r.id);
   const files = [];
   for (const r of recs) { try { if (r && r.blob && r.blob.size) files.push(new File([r.blob], r.name || ('shared-' + dateStamp(r.lastModified) + '.' + extOf(guessType(r.name) !== 'application/octet-stream' ? guessType(r.name) : r.blob.type)), { type: r.blob.type || guessType(r.name), lastModified: r.lastModified || Date.now() })); } catch (e) {} }
   addFiles(files, 'shared');

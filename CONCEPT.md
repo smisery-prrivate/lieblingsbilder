@@ -177,6 +177,9 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v14 (2026-10-31): a picture shared to the app is stored once: the takeover of the parking slot runs
+  one at a time, claims each picture first and waits for the photo list (start, unlock and the app
+  coming back to the front used to take the same picture twice).
 - v13 (2026-10-30): videos. Up to 300 MB each, kept in pieces of 8 MB, each piece sealed on its
   own with the video's key (on the device, as bucket objects `<id>.<tag>.<n>`, or as Drive files),
   so no phone holds a whole video twice to encrypt it and no piece reaches a 50 MB object limit.
