@@ -153,7 +153,9 @@ Like Snapdoc, the app gets its **own Supabase project**.
 5. Publish with GitHub Pages (the share sheet, fingerprint lock and installing need HTTPS).
 
 Free Supabase projects pause after a week without requests (restart in the dashboard) and hold
-**1 GB** of files. See "Storage" below before relying on it for thousands of photos.
+**1 GB** of files. See "Storage" below before relying on it for thousands of photos. The GitHub
+Action `.github/workflows/keepalive.yml` sends one request every second day so that the project
+stays awake while nobody opens the app (the publishable key in it is public by design).
 
 ## Storage: thousands of photos a year
 

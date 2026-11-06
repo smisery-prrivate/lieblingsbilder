@@ -1,0 +1,19 @@
+# A free Supabase project is paused after 7 days without a request. This pings the project every
+# second day, so it stays awake while nobody opens the app. The publishable key is public by
+# design (it is in config.js); row level security decides what it may read, which is nothing here.
+name: keep the cloud awake
+on:
+  schedule:
+    - cron: '17 6 */2 * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: one request to the project's data API
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "apikey: sb_publishable_sQpNABz4i_TwCtBTyYR_iw_QjTJ6uHE" \
+            "https://bqvibovnrhwgavwkrsbc.supabase.co/rest/v1/")
+          echo "answered $code"
+          case "$code" in 2*|3*|4*) ;; *) echo "the project did not answer"; exit 1 ;; esac
