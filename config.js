@@ -11,5 +11,5 @@
 window.APP_CONFIG = window.APP_CONFIG || {
   supabaseUrl: 'https://bqvibovnrhwgavwkrsbc.supabase.co',
   supabaseKey: 'sb_publishable_sQpNABz4i_TwCtBTyYR_iw_QjTJ6uHE',
-  googleClientId: ''
+  googleClientId: '870470338748-6n65ts3g8iu7t6jrpad8i7gu1a2d8vqt.apps.googleusercontent.com'
 };

@@ -137,7 +137,8 @@ Set-up (once, by the owner), as for Snapdoc: Google Cloud Console → project �
 Drive API → OAuth consent screen (external, scope `.../auth/drive.file`) → Credentials → OAuth
 client ID, type "Web application", authorised JavaScript origin `https://smisery-prrivate.github.io`,
 authorised redirect URI `https://smisery-prrivate.github.io/lieblingsbilder/` → put the client id
-into `googleClientId` in `config.js`.
+into `googleClientId` in `config.js` (done 2026-11-06: project `baby-video-512314`, client
+"Lieblingsbilder Web", app in "Testing" with the owner as test user).
 
 ## Set-up (once, by the owner)
 
