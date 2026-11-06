@@ -122,8 +122,11 @@ Thousands of photos a year do not fit the small Supabase bucket. Once a Google a
 connected in the menu (`app-drive.js`, Snapdoc's sign-in taken over: a plain redirect to Google
 and back, scope `drive.file`, no Google script, the token stored encrypted and good for an hour),
 the files of the owner's **own** photos go into a folder "Lieblingsbilder" of that Drive, sealed
-exactly as before: Google holds ciphertext, two files per photo, named `<photo id>.<tag>` and
-`….t`, each tagged with the photo id. The entry in Supabase says where the files are (`st`,
+exactly as before: Google holds ciphertext, two files per photo, named after the date taken and the
+original name (`2024-07-15 10-30-00 IMG_1234.jpg.lb`, `….thumb.jpg.lb`, a video's pieces
+`….part01of12.mp4.lb`), their Drive times set to the date taken, each tagged with the photo id. So
+the folder reads like the app sorts; the one thing Google learns about a photo is when it was
+taken. The app finds files by id, never by name, and renames them after a date change. The entry in Supabase says where the files are (`st`,
 `df`, `dt`), so every device of the same person fetches them from Drive, with its own connection
 to the same Google account. Deleting a photo moves its Drive
 files to the bin. When the hour is over, own photos wait for a tap on Reconnect (the status line
@@ -180,6 +183,8 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v18 (2026-11-06): Drive files are named after the date taken and the original name, with the
+  date taken as their Drive time; files named by an older release are renamed by the next sync.
 - v17 (2026-11-06): the move to Drive counts against the whole move ("12 of 40"), not against the pass.
 - v16 (2026-11-06): the menu links to the "Lieblingsbilder" folder in Drive; the folder is made when
   Drive is connected, not only with the first upload.

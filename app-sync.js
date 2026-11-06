@@ -160,7 +160,7 @@ let syncCtl = null; const upFail = new Map();
 function abortSync() { if (syncCtl) syncCtl.abort(); }
 function syncRetry() { upFail.clear(); if (syncState === 'error') setSyncState(''); syncNow(); }
 const sealedMeta = p => { const obj = p.deleted ? { del: true, u: p.updated_at }
-  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, rot: p.rot || 0, kind: p.kind || '', chunks: p.chunks || 0, dur: p.dur || 0, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', dfs: p.dfs || [], u: p.updated_at, del: false };
+  : { name: p.name, type: p.type, w: p.w, h: p.h, size: p.size, taken_at: p.taken_at, created_at: p.created_at, folder: p.folder, caption: p.caption, star: !!p.star, rot: p.rot || 0, kind: p.kind || '', chunks: p.chunks || 0, dur: p.dur || 0, dn: p.dn || 0, tag: p.tag, pk: p.pk || '', st: p.st || 'sb', df: p.df || '', dt: p.dt || '', dfs: p.dfs || [], u: p.updated_at, del: false };
   return p.folder ? Vault.fsealJson(p.folder, obj, 'lb|meta|' + p.id) : Vault.csealJson(obj, 'lb|meta|' + p.id); };
 const objName = (u, p, tag, thumb) => u + '/' + p.id + '.' + tag + (thumb ? '.t' : '');
 const pieceName = (u, p, tag, i) => u + '/' + p.id + '.' + tag + '.' + i;      // a video's pieces
@@ -177,7 +177,7 @@ async function applyRow(row, folder) {
   if (!!m.del !== del || +m.u !== upd) throw new Error('entry does not match its seal');
   if (!p0) {
     const n = migrate({ id, name: String(m.name || ''), type: safeType(m.type), w: +m.w || 0, h: +m.h || 0, size: +m.size || 0, taken_at: +m.taken_at || upd, created_at: +m.created_at || upd,
-      caption: String(m.caption || ''), star: !!m.star, rot: +m.rot || 0, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), dfs: Array.isArray(m.dfs) ? m.dfs.map(String) : [], kind: m.kind === 'video' ? 'video' : '', chunks: +m.chunks || 0, dur: +m.dur || 0, folder });
+      caption: String(m.caption || ''), star: !!m.star, rot: +m.rot || 0, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), dfs: Array.isArray(m.dfs) ? m.dfs.map(String) : [], kind: m.kind === 'video' ? 'video' : '', chunks: +m.chunks || 0, dur: +m.dur || 0, dn: +m.dn || 0, folder });
     photos.push(n); snap[id] = sigOf(n); return 'new';
   }
   const p = p0, before = sigOf(p), wasDeleted = p.deleted;
@@ -186,7 +186,7 @@ async function applyRow(row, folder) {
   if (!del && !p.up && m.tag) { p.up = true; p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); p.dfs = Array.isArray(m.dfs) ? m.dfs.map(String) : []; }      // another device holds the files up already (or ours were accepted before the list was saved)
   if (!del && m.tag && p.tag && m.tag !== p.tag && p.up) { p.owed = p.owed || []; for (const n of [objName(session.uid, p, p.tag, false), objName(session.uid, p, p.tag, true)]) if (!p.owed.includes(n)) p.owed.push(n); p.tag = String(m.tag); p.pk = String(m.pk || ''); p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); p.dfs = Array.isArray(m.dfs) ? m.dfs.map(String) : []; }      // two devices uploaded the same photo: one set of files is enough
   if (upd > p.updated_at) {                                       // the later change wins
-    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; p.caption = String(m.caption || ''); p.star = !!m.star; p.rot = [90, 180, 270].includes(+m.rot) ? +m.rot : 0; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag) { if (m.pk) p.pk = String(m.pk); if (m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); p.dfs = Array.isArray(m.dfs) ? m.dfs.map(String) : []; } } }      // moved to another folder (the key rewrapped) or the files moved (to Drive) on another device
+    if (!del) { p.taken_at = +m.taken_at || p.taken_at; p.folder = folder; p.caption = String(m.caption || ''); p.star = !!m.star; p.rot = [90, 180, 270].includes(+m.rot) ? +m.rot : 0; if (!p.name) p.name = String(m.name || ''); if (m.tag && String(m.tag) === p.tag) { if (m.pk) p.pk = String(m.pk); if (m.st) { p.st = m.st === 'gd' ? 'gd' : 'sb'; p.df = String(m.df || ''); p.dt = String(m.dt || ''); p.dfs = Array.isArray(m.dfs) ? m.dfs.map(String) : []; p.dn = +m.dn || 0; } } }      // moved to another folder (the key rewrapped) or the files moved (to Drive) on another device
     p.deleted = del; p.updated_at = upd; p.srv = upd;
     if (del && !wasDeleted) await deletedElsewhere(p);
     else if (!del && wasDeleted) { p.cloudPurged = false; p.have = false; p.th = false; }      // it comes back on another device: fetched again from the cloud
@@ -296,13 +296,13 @@ async function uploadPhoto(p, u, msg) {
       for (let i = 0; i < p.chunks; i++) {
         const piece = await chunkGet(p, i); if (!piece) { p.have = false; throw new Error('"' + photoLabel(p) + '" is not complete on this device any more.'); }
         if (msg && p.chunks > 1) setSyncState('busy', msg + ' · ' + Math.round(i / p.chunks * 100) + '%');
-        dfs.push(await put(piece, 'f', i, pieceName(u, p, tag, i), p.id + '.' + tag + '.' + i));
+        dfs.push(await put(piece, 'f', i, pieceName(u, p, tag, i), driveName(p, 'f', i)));
       }
       if (!toDrive) dfs = [];
-    } else df = await put(full, 'f', undefined, objName(u, p, tag, false), p.id + '.' + tag);
+    } else df = await put(full, 'f', undefined, objName(u, p, tag, false), driveName(p, 'f'));
     const th = p.th ? await thumbGet(p.id) : null;
-    const dt = th ? await put(th, 't', undefined, objName(u, p, tag, true), p.id + '.' + tag + '.t') : '';
-    p.st = toDrive ? 'gd' : 'sb'; p.df = df; p.dt = dt; p.dfs = dfs; p.up = true;
+    const dt = th ? await put(th, 't', undefined, objName(u, p, tag, true), driveName(p, 't')) : '';
+    p.st = toDrive ? 'gd' : 'sb'; p.df = df; p.dt = dt; p.dfs = dfs; p.up = true; if (toDrive) p.dn = p.taken_at;
   } catch (e) {
     p.tag = was; p.pk = wasPk;
     if (e && e.reconnect) await driveLost();
@@ -380,12 +380,12 @@ async function syncNow() {
           const made = []; let df = '', dfs = [];
           try {
             if (p.kind === 'video') {                               // one piece at a time
-              for (let k = 0; k < p.chunks; k++) { const id = await driveUpload(p, p.id + '.' + p.tag + '.' + k, 'f', new Blob([await get(pieceName(u, p, p.tag, k))], { type: 'application/octet-stream' })); made.push(id); dfs.push(id); }
-            } else { df = await driveUpload(p, p.id + '.' + p.tag, 'f', new Blob([await get(objName(u, p, p.tag, false))], { type: 'application/octet-stream' })); made.push(df); }
+              for (let k = 0; k < p.chunks; k++) { const id = await driveUpload(p, driveName(p, 'f', k), 'f', new Blob([await get(pieceName(u, p, p.tag, k))], { type: 'application/octet-stream' })); made.push(id); dfs.push(id); }
+            } else { df = await driveUpload(p, driveName(p, 'f'), 'f', new Blob([await get(objName(u, p, p.tag, false))], { type: 'application/octet-stream' })); made.push(df); }
             const th = p.th ? await get(objName(u, p, p.tag, true), true) : null;
-            const dt = th ? await driveUpload(p, p.id + '.' + p.tag + '.t', 't', new Blob([th], { type: 'application/octet-stream' })) : ''; if (dt) made.push(dt);
+            const dt = th ? await driveUpload(p, driveName(p, 't'), 't', new Blob([th], { type: 'application/octet-stream' })) : ''; if (dt) made.push(dt);
             p.owed = p.owed || []; for (const n of bucketNames(u, p, p.tag)) if (!p.owed.includes(n)) p.owed.push(n);      // the bucket's copies go after the entry
-            p.st = 'gd'; p.df = df; p.dt = dt; p.dfs = dfs;
+            p.st = 'gd'; p.df = df; p.dt = dt; p.dfs = dfs; p.dn = p.taken_at;
             save({ sync: false });
           } catch (e) { p.owed = p.owed || []; for (const id of made) if (!p.owed.includes('gd:' + id)) p.owed.push('gd:' + id); throw e; }
         } catch (e) {
@@ -395,6 +395,17 @@ async function syncNow() {
         }
       }
       if (!photos.some(toMove)) { settings.moveToDrive = false; settings.moveTotal = 0; saveSettings(); renderDriveBox(); toast('All your photos are in Google Drive now.'); }
+    }
+    // files in Drive whose names do not carry the date taken (a date change, or an older release named them by id): renamed, a few hundred per pass
+    if (DRIVE && drive && driveTokenOk()) {
+      let n = 0;
+      for (const p of photos) {
+        if (p.deleted || p.st !== 'gd' || !p.up || p.dn === p.taken_at) continue;
+        if (stop() || n >= 200) break;
+        try { await driveRename(p); p.dn = p.taken_at; n++; }
+        catch (e) { if (e && e.reconnect) { await driveLost(); break; } if (e instanceof TypeError || navigator.onLine === false) break; }
+      }
+      if (n) save({ sync: false });
     }
     let entryFailed = 0, entryWhy = '';
     for (const p of photos.slice()) {                             // write the entries that changed here, each one conditionally

@@ -122,8 +122,29 @@ function multipart(meta, blob) {
   return new Blob(['--' + b + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(meta) + '\r\n--' + b + '\r\nContent-Type: application/octet-stream\r\n\r\n', blob, '\r\n--' + b + '--'], { type: 'multipart/related; boundary=' + b });
 }
 // one sealed file (the full picture or the thumbnail) into the folder; returns the Drive file id
+// The name of a file in Drive carries the date taken and the original name, so the folder reads
+// like the app sorts ("2024-07-15 10-30-00 IMG_1234.jpg.lb"); the file's own times in Drive are
+// set to the date taken too. That is the one thing Google learns about a photo: when it was taken.
+// The app never finds a file by its name (it keeps the ids), so a name may change at any time.
+function driveName(p, kind, idx) {
+  const d = new Date(p.taken_at), stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+  const base = (p.name || '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim().slice(0, 60), ext = extOf(p.type);
+  const head = stamp + (base ? ' ' + base : '');
+  if (kind === 't') return head + '.thumb.jpg.lb';
+  if (idx != null) return head + '.part' + pad(idx + 1) + 'of' + pad(p.chunks) + '.' + ext + '.lb';
+  return head + '.' + ext + '.lb';
+}
+const driveTimes = p => { const t = new Date(p.taken_at).toISOString(); return { createdTime: t, modifiedTime: t }; };
 async function driveUpload(p, name, kind, blob) {
-  return (await driveUploadBody({ name, parents: [await driveFolder()], appProperties: { lb: p.id, k: kind } }, blob)).id;
+  return (await driveUploadBody(Object.assign({ name, parents: [await driveFolder()], appProperties: { lb: p.id, k: kind } }, driveTimes(p)), blob)).id;
+}
+// the files of a photo named after its current date (after a date change, or for files named by an older release)
+async function driveRename(p) {
+  const jobs = [];
+  if (p.df) jobs.push([p.df, driveName(p, 'f')]);
+  if (p.dt) jobs.push([p.dt, driveName(p, 't')]);
+  (p.dfs || []).forEach((id, i) => { if (id) jobs.push([id, driveName(p, 'f', i)]); });
+  for (const [id, name] of jobs) await driveApi('PATCH', '/drive/v3/files/' + encodeURIComponent(id) + '?fields=id', Object.assign({ name }, driveTimes(p)));
 }
 async function driveDownload(id) {
   const r = await fetch(DRIVE.api + '/drive/v3/files/' + encodeURIComponent(id) + '?alt=media', { headers: { Authorization: 'Bearer ' + drive.token }, credentials: 'omit', cache: 'no-store' });

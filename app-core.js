@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v17';
+const VERSION = 'v18';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -187,7 +187,7 @@ async function resealAll() {
    On this device: have (the full image is stored here), th (the thumbnail is stored here).
    Cloud: tag (the name part of the uploaded files), pk (this photo's own key, wrapped by the cloud
    key), st ('sb': the files are in the Supabase bucket, 'gd': in the owner's Google Drive, then
-   df and dt are the Drive file ids), up (both files accepted for this tag),
+   df and dt are the Drive file ids, dn the date taken the Drive file names carry), up (both files accepted for this tag),
    srv (the updated_at the cloud entry carries; -1 = send ours again), seen (server stamp of the
    entry last seen), cloudPurged, owed (object names still to be removed). */
 let photos = [], snap = {}, foreignDirty = false, photosLoaded = false, cursors = {}, account = '';
@@ -198,14 +198,14 @@ const folderById = id => folders.find(f => f.id === id && !f.deleted);
 const folderName = id => { const f = folderById(id); return f ? f.name : ''; };
 const liveFolders = () => folders.filter(f => !f.deleted).sort((a, b) => a.name.localeCompare(b.name));
 const fsigOf = f => JSON.stringify([f.name, !!f.deleted]);
-const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, p.rot || 0, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '', (p.dfs || []).join(','), p.pk || '']);      // where the files live and the wrapped key are part of the entry too
+const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, p.rot || 0, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '', (p.dfs || []).join(','), p.dn || 0, p.pk || '']);      // where the files live and the wrapped key are part of the entry too
 function migrate(p) {
   p.name = p.name == null ? '' : String(p.name); p.type = safeType(p.type); p.w = +p.w || 0; p.h = +p.h || 0; p.size = +p.size || 0;
   p.created_at = p.created_at || Date.now(); p.taken_at = p.taken_at || p.created_at; p.updated_at = p.updated_at || p.created_at;
   p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : ''; p.star = !!p.star; p.rot = [90, 180, 270].includes(+p.rot) ? +p.rot : 0;
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
   p.st = p.st === 'gd' ? 'gd' : 'sb'; p.df = p.df ? String(p.df) : ''; p.dt = p.dt ? String(p.dt) : '';
-  p.kind = p.kind === 'video' ? 'video' : ''; p.chunks = Math.max(0, Math.floor(+p.chunks || 0)); p.dur = +p.dur || 0; p.dfs = Array.isArray(p.dfs) ? p.dfs.map(String) : [];
+  p.kind = p.kind === 'video' ? 'video' : ''; p.chunks = Math.max(0, Math.floor(+p.chunks || 0)); p.dur = +p.dur || 0; p.dfs = Array.isArray(p.dfs) ? p.dfs.map(String) : []; p.dn = +p.dn || 0;
   return p;
 }
 const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', folders: Array.isArray(v.folders) ? v.folders : [] } : { photos: [], cursors: {}, account: '', folders: [] };
