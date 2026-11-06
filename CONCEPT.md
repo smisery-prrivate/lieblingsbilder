@@ -180,6 +180,8 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v16 (2026-11-06): the menu links to the "Lieblingsbilder" folder in Drive; the folder is made when
+  Drive is connected, not only with the first upload.
 - v15 (2026-11-06): Google Drive switched on (the client id in `config.js`); a release of its own,
   because a changed `config.js` reaches installed apps only with a new release.
 - v14 (2026-10-31): a picture shared to the app is stored once: the takeover of the parking slot runs

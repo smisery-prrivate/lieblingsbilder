@@ -60,6 +60,7 @@ async function driveAdopt(qp) {
     nd.email = r.user && r.user.emailAddress || nd.email;
   } catch (e) { return 'Google Drive did not accept the connection: ' + errText(e); }
   drive = nd; driveState = ''; driveMsg = ''; await storeDrive();
+  try { await driveFolder(); } catch (e) {}      // the folder right away, so the menu can link to it before the first upload
   return '';
 }
 async function driveDisconnect() {
@@ -149,6 +150,7 @@ function renderDriveBox() {
   const left = photos.filter(p => !p.deleted && p.up && p.st !== 'gd').length;
   const line = driveState === 'reconnect' ? 'The connection has run out. Tap Reconnect to continue.' : driveState === 'error' ? driveMsg : n + (n === 1 ? ' photo' : ' photos') + ' in Drive' + (waiting ? ' · ' + waiting + ' waiting' : '');
   box.innerHTML = '<div class="statecard' + (err ? ' err' : '') + '"><div class="t">Google Drive · ' + esc(drive.email || '') + '</div><div class="s">Folder "' + esc(DRIVE.folder) + '" · ' + esc(line) + '</div></div>' +
+    (drive.folderId ? '<a id="driveOpen" class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="https://drive.google.com/drive/folders/' + encodeURIComponent(drive.folderId) + '" target="_blank" rel="noopener">Open the folder in Google Drive</a>' : '<div class="hint">The folder in Drive is made with the first upload; its link appears here then.</div>') +
     (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '<button id="driveNowBtn" class="btn">Sync now</button>') +
     (left ? (settings.moveToDrive ? '<div class="hint">Moving ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive… (continues on its own)</div>' : '<button id="driveMove" class="btn">Move ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive</button>') : '') +
     '<button id="driveOff" class="btn quiet">Disconnect Google Drive</button>';
