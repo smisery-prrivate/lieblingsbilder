@@ -180,6 +180,7 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v17 (2026-11-06): the move to Drive counts against the whole move ("12 of 40"), not against the pass.
 - v16 (2026-11-06): the menu links to the "Lieblingsbilder" folder in Drive; the folder is made when
   Drive is connected, not only with the first upload.
 - v15 (2026-11-06): Google Drive switched on (the client id in `config.js`); a release of its own,

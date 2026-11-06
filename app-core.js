@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v16';
+const VERSION = 'v17';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -44,7 +44,7 @@ function writeGuard() {
 }
 
 // ---------- settings (not sensitive, plain) ----------
-let settings = { lockAfter: 0, keepAll: false, moveToDrive: false };      // moveToDrive: own photos still in the Supabase bucket are being moved to Drive      // lockAfter: 0 = lock as soon as the app leaves the screen; keepAll: download every full-size photo to this device
+let settings = { lockAfter: 0, keepAll: false, moveToDrive: false, moveTotal: 0 };      // moveToDrive: own photos still in the Supabase bucket are being moved to Drive      // lockAfter: 0 = lock as soon as the app leaves the screen; keepAll: download every full-size photo to this device
 const LOCK_AFTER = [0, 5, 60, 300, 1800];
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SET_KEY) || '{}')); } catch (e) {}
 if (!LOCK_AFTER.includes(+settings.lockAfter)) settings.lockAfter = 0;      // only the offered values: nothing in plain storage can switch the lock off

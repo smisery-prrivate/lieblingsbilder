@@ -371,9 +371,10 @@ async function syncNow() {
     const toMove = p => settings.moveToDrive && !p.deleted && p.up && p.st !== 'gd' && !!p.tag;
     if (settings.moveToDrive && DRIVE && drive && driveTokenOk()) {
       const list = photos.filter(toMove); let i = 0;
+      const total = Math.max(+settings.moveTotal || 0, list.length), done0 = total - list.length;      // counted against the whole move, not the pass: a pass that starts over does not reset the number
       for (const p of list) {
         if (stop()) return;
-        i++; setSyncState('busy', 'Moving to Drive ' + i + ' of ' + list.length + ' · ' + photoLabel(p));
+        i++; setSyncState('busy', 'Moving to Drive ' + (done0 + i) + ' of ' + total + ' · ' + photoLabel(p));
         try {
           const get = async (name, may404) => { const r = await api('GET', '/storage/v1/object/authenticated/lb/' + name); if (r.status === 404 && may404) return null; if (!r.ok) throw await httpError('Reading "' + photoLabel(p) + '"', r); return r.arrayBuffer(); };
           const made = []; let df = '', dfs = [];
@@ -393,7 +394,7 @@ async function syncNow() {
           upFailed++; upWhy = 'Moving "' + photoLabel(p) + '" to Drive failed: ' + errText(e);
         }
       }
-      if (!photos.some(toMove)) { settings.moveToDrive = false; saveSettings(); renderDriveBox(); }
+      if (!photos.some(toMove)) { settings.moveToDrive = false; settings.moveTotal = 0; saveSettings(); renderDriveBox(); toast('All your photos are in Google Drive now.'); }
     }
     let entryFailed = 0, entryWhy = '';
     for (const p of photos.slice()) {                             // write the entries that changed here, each one conditionally
