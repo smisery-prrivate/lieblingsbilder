@@ -4,7 +4,7 @@ if (self !== top) { try { document.documentElement.hidden = true; } catch (e) {}
    screens and the back button. Built the Snapdoc way: several plain script files that share one
    scope (no build step); index.html loads them in order. Nothing readable is ever written to the
    device: every image, thumbnail, the photo list and the sign-in token are sealed by the vault. */
-const VERSION = 'v18';
+const VERSION = 'v19';
 const $ = id => document.getElementById(id);
 const CFG = self.APP_CONFIG || {};
 const SYNC = CFG.supabaseUrl && CFG.supabaseKey ? { url: String(CFG.supabaseUrl).replace(/\/$/, ''), key: CFG.supabaseKey } : null;
@@ -196,20 +196,29 @@ let photos = [], snap = {}, foreignDirty = false, photosLoaded = false, cursors 
 let folders = [], fsnap = {};
 const folderById = id => folders.find(f => f.id === id && !f.deleted);
 const folderName = id => { const f = folderById(id); return f ? f.name : ''; };
-const liveFolders = () => folders.filter(f => !f.deleted).sort((a, b) => a.name.localeCompare(b.name));
-const fsigOf = f => JSON.stringify([f.name, !!f.deleted]);
+const liveFolders = () => folders.filter(f => !f.deleted).sort((a, b) => (a.prot && !folderOpen(a)) - (b.prot && !folderOpen(b)) || a.name.localeCompare(b.name));
+const openFolders = () => liveFolders().filter(folderOpen);      // the ones a photo can be moved into
+const fsigOf = f => JSON.stringify([f.name, !!f.deleted, !!f.prot, f.pwrap || '']);
+// a protected folder: its key is bound to a passphrase of its own and lives in memory only, while open
+const protFolder = id => { const f = id && folders.find(x => x.id === id); return !!(f && f.prot); };
+const folderOpen = f => !f.prot || Vault.hasFolderKey(f.id);
+// what the device keeps of a photo in a closed protected folder: what sync needs, nothing a person cares about
+const STUB_KEYS = ['id', 'folder', 'updated_at', 'srv', 'seen', 'up', 'tag', 'pk', 'st', 'df', 'dt', 'dfs', 'owed', 'cloudPurged', 'deleted'];
+const stubOf = p => { const s = { stub: true }; for (const k of STUB_KEYS) if (p[k] !== undefined) s[k] = p[k]; return s; };
+const stubbable = p => protFolder(p.folder) && p.up && p.srv === p.updated_at;      // a photo not yet in the cloud stays whole until it is
 const sigOf = p => JSON.stringify([p.taken_at, p.folder, p.caption, !!p.star, p.rot || 0, !!p.deleted, p.st || 'sb', p.df || '', p.dt || '', (p.dfs || []).join(','), p.dn || 0, p.pk || '']);      // where the files live and the wrapped key are part of the entry too
 function migrate(p) {
   p.name = p.name == null ? '' : String(p.name); p.type = safeType(p.type); p.w = +p.w || 0; p.h = +p.h || 0; p.size = +p.size || 0;
   p.created_at = p.created_at || Date.now(); p.taken_at = p.taken_at || p.created_at; p.updated_at = p.updated_at || p.created_at;
   p.folder = p.folder ? String(p.folder) : ''; p.caption = p.caption ? String(p.caption) : ''; p.star = !!p.star; p.rot = [90, 180, 270].includes(+p.rot) ? +p.rot : 0;
   p.have = !!p.have; p.th = !!p.th; p.up = !!p.up; p.tag = p.tag || ''; p.pk = p.pk || ''; p.srv = p.srv || 0; p.seen = p.seen || 0;
+  p.stub = !!p.stub;
   p.st = p.st === 'gd' ? 'gd' : 'sb'; p.df = p.df ? String(p.df) : ''; p.dt = p.dt ? String(p.dt) : '';
   p.kind = p.kind === 'video' ? 'video' : ''; p.chunks = Math.max(0, Math.floor(+p.chunks || 0)); p.dur = +p.dur || 0; p.dfs = Array.isArray(p.dfs) ? p.dfs.map(String) : []; p.dn = +p.dn || 0;
   return p;
 }
 const unpackList = v => v && Array.isArray(v.photos) ? { photos: v.photos, cursors: v.cursors || {}, account: v.account || '', folders: Array.isArray(v.folders) ? v.folders : [] } : { photos: [], cursors: {}, account: '', folders: [] };
-const migrateFolder = f => { f.name = f.name == null ? '' : String(f.name); f.created_at = f.created_at || Date.now(); f.updated_at = f.updated_at || f.created_at; f.srv = f.srv || 0; f.seen = f.seen || 0; f.deleted = !!f.deleted; return f; };
+const migrateFolder = f => { f.prot = !!f.prot; f.pwrap = f.pwrap ? String(f.pwrap) : ''; f.psalt = f.psalt ? String(f.psalt) : ''; f.piter = +f.piter || 0; f.name = f.name == null ? '' : String(f.name); f.created_at = f.created_at || Date.now(); f.updated_at = f.updated_at || f.created_at; f.srv = f.srv || 0; f.seen = f.seen || 0; f.deleted = !!f.deleted; return f; };
 async function loadPhotos() {
   const r = await idb.get('meta', 'photos'); let v = null;
   if (r) v = await Vault.openJson(r.data, 'lb|photos');
@@ -241,7 +250,8 @@ function persist() {
     persistQueued = false;
     if (passive) return false;
     if (foreignDirty) { foreignDirty = false; await mergeStored(); }
-    await idb.put('meta', { id: 'photos', data: await Vault.sealJson({ photos, cursors, account, folders }, 'lb|photos') });
+    const keep = { photos: photos.map(p => stubbable(p) ? stubOf(p) : p), cursors, account, folders: folders.map(f => f.prot ? Object.assign({}, f, { name: '' }) : f) };      // a protected folder's name and photos never rest on the device
+    await idb.put('meta', { id: 'photos', data: await Vault.sealJson(keep, 'lb|photos') });
     persistFailed = false;
     try { localStorage.setItem(TICK_KEY, Date.now() + '.' + Math.random()); } catch (e) {}
     return true;
@@ -260,7 +270,8 @@ function save(opts) {
   if (!opts || opts.sync !== false) scheduleSync();
   return stored;
 }
-const alive = () => photos.filter(p => !p.deleted).sort((a, b) => b.taken_at - a.taken_at || b.created_at - a.created_at);
+const closedHere = p => !!(p.folder && protFolder(p.folder) && !Vault.hasFolderKey(p.folder));      // in a protected folder that is closed: shown nowhere, whole or not
+const alive = () => photos.filter(p => !p.deleted && !p.stub && !closedHere(p)).sort((a, b) => b.taken_at - a.taken_at || b.created_at - a.created_at);
 const byId = id => photos.find(p => p.id === id);
 async function purgePhotoData(p) {
   await idb.del('images', p.id).catch(() => {}); await idb.del('thumbs', p.id).catch(() => {});

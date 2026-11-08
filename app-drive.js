@@ -127,6 +127,7 @@ function multipart(meta, blob) {
 // set to the date taken too. That is the one thing Google learns about a photo: when it was taken.
 // The app never finds a file by its name (it keeps the ids), so a name may change at any time.
 function driveName(p, kind, idx) {
+  if (protFolder(p.folder)) return p.id + (kind === 't' ? '.t' : idx != null ? '.' + idx : '') + '.lb';      // a protected folder's files say nothing about their photos
   const d = new Date(p.taken_at), stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
   const base = (p.name || '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim().slice(0, 60), ext = extOf(p.type);
   const head = stamp + (base ? ' ' + base : '');

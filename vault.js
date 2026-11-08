@@ -354,6 +354,23 @@ const Vault = (() => {
   // wrapped for the cloud, under the cloud key
   const wrapFolderKey = (id, uid) => (async () => b64(await sealWith(need(CK), folderKey(id).raw, 'lb|fk|ck|' + uid + '|' + id)))();
   const unwrapFolderKey = async (s, uid, id) => new Uint8Array(await openWith(need(CK), unb64(s), 'lb|fk|ck|' + uid + '|' + id));
+  // ---------- protected folders: the key bound to a passphrase of its own, never stored on a device ----------
+  // holdFolderKey keeps a key in memory only (it goes with the page); forgetLocalFolderKey removes the
+  // stored copy and keeps the one in memory. The passphrase wrap is bound to the account and the folder.
+  // prev: the folder's key before it was protected; entries not yet resealed still open with it
+  async function holdFolderKey(id, raw, prev) { folders.set(id, { raw: new Uint8Array(raw), key: await importAes(raw), prevRaw: prev ? new Uint8Array(prev) : null, prev: prev ? await importAes(prev) : null }); }
+  const withFolderKey = async (id, fn) => { const r = folderKey(id); try { return await fn(r.key); } catch (e) { if (r.prev) return fn(r.prev); throw e; } };
+  async function forgetLocalFolderKey(id) { if (kv) await kv.del('fk|' + id); }
+  function forgetFolderKey(id) { folders.delete(id); }
+  async function wrapFolderKeyPass(id, raw, pass, uid) {
+    const salt = rand(16), k = await pbkdfKey(pass, salt, PBKDF_ITER);
+    return { pwrap: b64(await sealWith(k, raw, 'lb|fk|pass|' + uid + '|' + id)), psalt: b64(salt), piter: PBKDF_ITER };
+  }
+  async function unwrapFolderKeyPass(id, pass, row, uid) {
+    const iter = Math.min(5000000, Math.max(100000, +row.piter || 0)), k = await pbkdfKey(pass, unb64(row.psalt), iter);
+    try { return new Uint8Array(await openWith(k, unb64(row.pwrap), 'lb|fk|pass|' + uid + '|' + id)); } catch (e) { throw new Error('Wrong passphrase'); }
+  }
+  const folderKeyRaw = id => new Uint8Array(folderKey(id).raw);
 
   // ---------- per-item keys: one random key per photo, wrapped by the cloud key ----------
   // Compartments: a key that leaks opens one photo, not the collection, and from each item key
@@ -388,11 +405,13 @@ const Vault = (() => {
     openJson: async (buf, aad) => JSON.parse(td.decode(await openLocal(buf, aad))),
     hasCloudKey: uid => !!CK && ckUid === uid, loadCloudKey, newItemKey, wrapItemKey, unwrapItemKey, sealItem, openItem,
     newFolderKey: () => rand(32), keepFolderKey, loadFolderKeys, dropFolderKey, resealFolderKeys, hasFolderKey: id => folders.has(id), unb64,
+    holdFolderKey, forgetLocalFolderKey, forgetFolderKey, wrapFolderKeyPass, unwrapFolderKeyPass, folderKeyRaw,
     wrapFolderKey, unwrapFolderKey,
     fsealJson: async (id, obj, aad) => b64(await sealWith(folderKey(id).key, te.encode(JSON.stringify(obj)), aad)),
-    fopenJson: async (id, s, aad) => JSON.parse(td.decode(await openWith(folderKey(id).key, unb64(s), aad))),
+    fopenJson: async (id, s, aad) => JSON.parse(td.decode(await withFolderKey(id, k => openWith(k, unb64(s), aad)))),
     fwrapItemKey: async (id, raw, aad) => b64(await sealWith(folderKey(id).key, raw, aad)),
-    funwrapItemKey: async (id, s, aad) => new Uint8Array(await openWith(folderKey(id).key, unb64(s), aad)), newEnvelope, openEnvelope, rewrapEnvelope, dropCloudKey,
+    funwrapItemKey: async (id, s, aad) => new Uint8Array(await withFolderKey(id, k => openWith(k, unb64(s), aad))),
+    folderPrevB64: id => { const r = folders.get(id); return r && r.prevRaw ? b64(r.prevRaw) : ''; }, newEnvelope, openEnvelope, rewrapEnvelope, dropCloudKey,
     cseal: (data, aad) => sealWith(need(CK), data, aad), copen: (buf, aad) => openWith(need(CK), buf, aad),
     csealJson: async (obj, aad) => b64(await sealWith(need(CK), te.encode(JSON.stringify(obj)), aad)),
     copenJson: async (s, aad) => JSON.parse(td.decode(await openWith(need(CK), unb64(s), aad)))

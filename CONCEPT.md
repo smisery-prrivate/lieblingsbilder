@@ -49,8 +49,23 @@ build step, local first, the Snapdoc vault and lock taken over as they are. Live
   key has that folder and nothing else; folder names never reach the server in the clear. For the
   owner nothing of this shows: "All" shows everything, a long press moves a photo with one tap
   (only its small key is rewrapped, the files stay), folders are renamed and deleted in the menu.
-  Protected folders (a folder key sealed by its own passphrase, never stored open on the device)
-  are the next step; the cloud rows already carry the fields for them.
+- **Protected folders (since v19).** A folder can be bound to a passphrase of its own (menu,
+  Folders, the folder, "Protect with a passphrase"; the rules of the app lock). It gets a new key,
+  wrapped in the cloud only by that passphrase (`pwrap`, PBKDF2 600,000 rounds) and by nothing
+  else; the key before travels sealed inside the folder's row, so entries not yet resealed still
+  open. The key rests on no device: it is held in memory while the folder is open and goes with the
+  page (the app lock restarts it), or with "Lock now". Closed, the folder shows as "🔒 Protected · n",
+  its photos appear nowhere, and the stored photo list keeps of them only what sync needs (no
+  name, no date, no caption); the folder's own name is not stored either. Opening asks for the
+  passphrase, reads the folder's row, and reads every entry of the folder again. Pictures of an
+  open protected folder are fetched from the cloud into memory only; after a photo is moved in or
+  uploaded there, nothing of it stays in the device's storage. In Drive its files carry neutral
+  names. Another device that knew the folder's key forgets it and its copies at its next sync.
+  Protecting needs cloud sync and every photo of the folder in the cloud; a photo goes into a
+  protected folder only once it is in the cloud. "Remove the protection" wraps the key with the
+  cloud key again. Honest limits: a forgotten passphrase cannot be recovered (the folder stays
+  closed for good); what another device had already shown or saved before it learnt of the
+  protection is beyond the app's reach; the count of photos in a closed folder is visible.
 
 ## Encryption, and what a compromise of one part gives away
 
@@ -63,7 +78,8 @@ renamed so that both apps can live on one origin. The parts are kept apart on pu
 | **Cloud account** (Supabase sign-in) | ciphertext files and sealed entries | nothing readable; a deleted or swapped entry is noticed (sealed with its change time and delete flag) |
 | **Cloud key** (wrapped by the encryption password, which never leaves the device) | the per-photo keys inside the entries | the collection, but only together with the password or an unlocked device |
 | **Per-photo key** (random, carried wrapped in the photo's entry) | that photo's full picture and thumbnail, through two derived keys | one photo; thumbnail keys open no full pictures |
-| **Folder key** (random, one per folder; on the device sealed by the local key, in the cloud sealed by the cloud key, for a protected folder by its own passphrase) | that folder's entries and per-photo keys | that folder, no other folder, nothing outside folders |
+| **Folder key** (random, one per folder; on the device sealed by the local key, in the cloud sealed by the cloud key) | that folder's entries and per-photo keys | that folder, no other folder, nothing outside folders |
+| **Protected folder key** (in the cloud only under its own passphrase; on a device only in memory, while open) | that folder | nothing: the account, the encryption password and the unlocked phone together still do not open it |
 | **Server** | ciphertext, sizes, stamps | cannot read, forge or swap: files carry the photo id, tag and kind inside the encryption |
 
 Honest limits, the same as in Snapdoc: a web page cannot scrub browser storage files, which is why
@@ -183,6 +199,9 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v19 (2026-11-08): protected folders (see above), tested across two devices: protect, restart,
+  wrong and right passphrase, the other device closing, the old key opening nothing, moving in,
+  lock now, protection off.
 - v18 (2026-11-06): Drive files are named after the date taken and the original name, with the
   date taken as their Drive time; files named by an older release are renamed by the next sync.
 - v17 (2026-11-06): the move to Drive counts against the whole move ("12 of 40"), not against the pass.

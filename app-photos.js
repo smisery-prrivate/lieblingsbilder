@@ -266,7 +266,12 @@ function renderFolders() {
   const chip = (label, val) => { const b = document.createElement('button'); b.className = 'pill' + (folderFilter === val ? ' on' : '') + (val === TOP ? ' top' : ''); b.textContent = label; b.addEventListener('click', () => { folderFilter = val; renderHome(); }); box.appendChild(b); };
   chip('All', '');
   if (stars) chip('★ Top ' + stars, TOP);
-  for (const f of fl) chip(f.name || 'Folder', f.id);
+  for (const f of fl) {
+    if (!folderOpen(f)) {                                           // closed: no name, no photos, a tap asks for the passphrase
+      const n = photos.filter(x => !x.deleted && x.folder === f.id).length, b = document.createElement('button');
+      b.className = 'pill locked'; b.textContent = '🔒 Protected' + (n ? ' · ' + n : ''); b.addEventListener('click', () => unlockSheet(f)); box.appendChild(b);
+    } else chip((f.prot ? '🔓 ' : '') + (f.name || 'Folder'), f.id);
+  }
   if (fl.length && alive().some(p => !p.folder)) chip('No folder', '\u0000');
   const nb = document.createElement('button'); nb.className = 'pill new'; nb.textContent = '+ New folder'; nb.addEventListener('click', newFolderSheet); box.appendChild(nb);
 }
@@ -354,7 +359,7 @@ $('list').addEventListener('scroll', () => { clearTimeout(pressTimer); pressTime
 let fanFor = null;
 function openFan(el, p) {
   if (fanFor || locked || passive) return;
-  const fan = $('fan'), box = $('fanBox'), fl = liveFolders();
+  const fan = $('fan'), box = $('fanBox'), fl = openFolders();
   box.innerHTML = '<div class="fanchips">' + fl.map(f => '<button class="pill' + (f.id === p.folder ? ' on' : '') + '" data-f="' + esc(f.id) + '">' + esc(f.name || 'Folder') + '</button>').join('') +
     '<button class="pill new" id="fanNew">+ New folder</button></div>' +
     '<div class="fannew" id="fanNewRow" hidden><input id="fanIn" type="text" placeholder="Folder name" maxlength="40" autocomplete="off" autocapitalize="sentences"><button id="fanSave" class="pill on">Save</button></div>' +
@@ -389,6 +394,7 @@ function scrollToMonth(k) { const el = $('list').querySelector('.month[data-mont
 // ---------- the full picture: from this device, or fetched from the cloud and kept ----------
 let selBusy = false;
 async function fullBlob(p, msg) {
+  if (protFull.has(p.id)) return protFull.get(p.id);
   if (p.have) { const b = await mediaGet(p); if (b) return b; p.have = false; persist(); }
   if (!haveKeyFor(p)) throw new Error(session ? (p.folder ? 'The key of this folder is not on this device yet.' : 'The encryption password is needed first (menu).') : 'This photo is only in the cloud. Sign in through the menu to fetch it.');
   if (typeof fetchFull !== 'function') throw new Error('not available');
@@ -450,7 +456,7 @@ function confirmDelete(list, after) {
 
 // ---------- folders and dates ----------
 function folderSheet(list, after, opts) {
-  const fl = liveFolders(), cur = list.length === 1 ? list[0].folder : '', more = !!(opts && opts.more);
+  const fl = openFolders(), cur = list.length === 1 ? list[0].folder : '', more = !!(opts && opts.more);
   openSheet(() => '<div class="grab"></div><h2>Folder</h2><p>' + (list.length === 1 ? 'Put this photo into a folder, for example Family or Holidays.' : 'Put these ' + list.length + ' photos into a folder.') + '</p>' +
     '<div class="chips" id="fChips">' + fl.map(f => '<button class="pill' + (f.id === cur ? ' on' : '') + '" data-f="' + esc(f.id) + '">' + esc(f.name || 'Folder') + '</button>').join('') + '</div>' +
     '<input id="fNew" type="text" placeholder="New folder" autocomplete="off" autocapitalize="sentences" maxlength="40"><button id="fSave" class="btn primary">Save</button>' +
@@ -468,7 +474,8 @@ function folderSheet(list, after, opts) {
 // files stay where they are. '' takes it out of every folder.
 async function movePhotos(list, fid) {
   fid = fid && folderById(fid) ? fid : '';
-  for (const p of list) await moveToFolder(p, fid);
+  if (fid && protFolder(fid) && list.some(p => !p.up || p.srv !== p.updated_at)) throw new Error('A photo goes into a protected folder once it is in the cloud. Wait until sync is done, then try again.');
+  for (const p of list) { await moveToFolder(p, fid); if (fid && protFolder(fid)) await forgetLocal(p); }      // nothing of it stays on the device
   save(); renderAll();
   toast(fid ? 'Moved to ' + (folderName(fid) || 'the folder') : 'Taken out of the folder');
 }
@@ -660,14 +667,54 @@ async function makeCollage(k) {
 
 // ---------- folders in the menu: rename, delete ----------
 function folderManageSheet(f) {
+  if (!folderOpen(f)) { unlockSheet(f); return; }
   const n = alive().filter(p => p.folder === f.id).length;
-  openSheet(() => '<div class="grab"></div><h2>' + esc(f.name || 'Folder') + '</h2><p>' + n + (n === 1 ? ' photo' : ' photos') + '. A folder has its own key: its photos are readable only with it.</p>' +
+  openSheet(() => '<div class="grab"></div><h2>' + (f.prot ? '🔓 ' : '') + esc(f.name || 'Folder') + '</h2><p>' + n + (n === 1 ? ' photo' : ' photos') + '. ' +
+    (f.prot ? 'Protected: its key is bound to its own passphrase and rests on no device. It closes again with the app lock, or now.' : 'A folder has its own key: its photos are readable only with it.') + '</p>' +
     '<input id="fnIn" type="text" maxlength="40" value="' + esc(f.name || '') + '" autocomplete="off"><button id="fnSave" class="btn primary">Rename</button>' +
+    (f.prot ? '<button id="fnLock" class="btn">🔒 Lock now</button><button id="fnUnprot" class="btn">Remove the protection</button>' : '<button id="fnProt" class="btn">🔒 Protect with a passphrase</button>') +
     '<button id="fnDel" class="btn quiet">Delete the folder (the photos stay, without a folder)</button>', () => {
       $('fnSave').addEventListener('click', () => { const name = $('fnIn').value.trim().slice(0, 40); if (!name) { $('fnIn').focus(); return; } f.name = name; save(); back(); renderAll(); toast('Renamed'); });
       $('fnIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('fnSave').click(); });
+      if ($('fnProt')) $('fnProt').addEventListener('click', () => { back(); setTimeout(() => protectSheet(f), 50); });
+      if ($('fnLock')) $('fnLock').addEventListener('click', async () => { back(); await lockFolder(f); toast('Locked'); });
+      if ($('fnUnprot')) $('fnUnprot').addEventListener('click', () => { back(); setTimeout(() => popup('Remove the protection?', 'The folder\'s key is then bound to your encryption password again, like every other folder, and its photos open without the passphrase.', [
+        { label: 'Remove the protection', cls: 'danger', fn: async () => { try { await unprotectFolder(f); toast('The protection is off'); } catch (e) { toast(errText(e)); } } }, { label: 'Keep it', cls: 'quiet' }]), 50); });
       $('fnDel').addEventListener('click', () => { back(); setTimeout(() => popup('Delete "' + (f.name || 'Folder') + '"?', 'Its ' + n + (n === 1 ? ' photo stays' : ' photos stay') + ', without a folder. Nothing is deleted from the cloud.', [
         { label: 'Delete the folder', cls: 'danger', fn: async () => { try { await movePhotos(alive().filter(p => p.folder === f.id), ''); f.deleted = true; if (folderFilter === f.id) folderFilter = ''; save(); renderAll(); toast('Folder deleted'); } catch (e) { toast('Could not delete: ' + errText(e)); } } },
         { label: 'Keep', cls: 'quiet' }]), 50); });
+    });
+}
+// protect: a passphrase of its own, asked twice; the same rules as the app lock
+function protectSheet(f) {
+  openSheet(() => '<div class="grab"></div><h2>🔒 Protect "' + esc(f.name || 'Folder') + '"</h2>' +
+    '<p>The folder gets a new key, bound only to this passphrase. Whoever has your phone, your account and your encryption password still sees only "🔒 Protected" and a count. The passphrase cannot be recovered: forgotten, the folder stays closed for good.</p>' +
+    '<input id="ppA" type="password" autocomplete="new-password" placeholder="Passphrase"><input id="ppB" type="password" autocomplete="new-password" placeholder="Repeat">' +
+    '<button id="ppGo" class="btn primary">Protect the folder</button><div class="hint" id="ppHint"></div>', () => {
+      let busyP = false;
+      $('ppGo').addEventListener('click', async () => {
+        const a = $('ppA').value, b = $('ppB').value, hint = $('ppHint'); if (busyP) return;
+        const prob = pinProblem(a); if (prob) { hint.textContent = prob; return; }
+        if (a !== b) { hint.textContent = 'The two entries differ.'; return; }
+        busyP = true; hint.textContent = 'Protecting…';
+        try { await protectFolder(f, a); back(); toast('Protected. It stays open until the app locks.'); } catch (e) { hint.textContent = errText(e); } finally { busyP = false; }
+      });
+    });
+}
+// open a protected folder for this session
+function unlockSheet(f) {
+  const n = photos.filter(x => !x.deleted && x.folder === f.id).length;
+  openSheet(() => '<div class="grab"></div><h2>🔒 Protected folder</h2><p>' + n + (n === 1 ? ' photo' : ' photos') + '. Enter its passphrase to open it until the app locks.</p>' +
+    '<input id="upIn" type="password" autocomplete="current-password" placeholder="Passphrase"><button id="upGo" class="btn primary">Open</button><div class="hint" id="upHint"></div>', () => {
+      setTimeout(() => { const i = $('upIn'); if (i) i.focus(); }, 80);
+      let busyU = false;
+      const go = async () => {
+        const pass = $('upIn').value, hint = $('upHint'); if (!pass || busyU) return;
+        busyU = true; hint.textContent = 'Opening…';
+        try { await unlockFolder(f, pass); back(); folderFilter = f.id; renderAll(); toast('"' + (f.name || 'Folder') + '" is open until the app locks.'); }
+        catch (e) { hint.textContent = errText(e); } finally { busyU = false; }
+      };
+      $('upGo').addEventListener('click', go);
+      $('upIn').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
     });
 }

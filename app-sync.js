@@ -175,6 +175,15 @@ async function applyRow(row, folder) {
   if (!row.meta) throw new Error('entry without a seal');
   const m = folder ? await Vault.fopenJson(folder, row.meta, 'lb|meta|' + id) : await Vault.copenJson(row.meta, 'lb|meta|' + id);     // throws unless it was sealed with the right key for this photo
   if (!!m.del !== del || +m.u !== upd) throw new Error('entry does not match its seal');
+  if (p0 && p0.stub) {                                             // a photo of a protected folder that has just been opened: filled from its entry
+    const owed = p0.owed;
+    for (const k of Object.keys(p0)) delete p0[k];
+    Object.assign(p0, migrate({ id, name: String(m.name || ''), type: safeType(m.type), w: +m.w || 0, h: +m.h || 0, size: +m.size || 0, taken_at: +m.taken_at || upd, created_at: +m.created_at || upd,
+      caption: String(m.caption || ''), star: !!m.star, rot: +m.rot || 0, deleted: del, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: !del || !!m.tag, tag: String(m.tag || ''), pk: String(m.pk || ''),
+      st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), dfs: Array.isArray(m.dfs) ? m.dfs.map(String) : [], kind: m.kind === 'video' ? 'video' : '', chunks: +m.chunks || 0, dur: +m.dur || 0, dn: +m.dn || 0, folder }));
+    if (owed) p0.owed = owed;
+    snap[id] = sigOf(p0); return 'ok';
+  }
   if (!p0) {
     const n = migrate({ id, name: String(m.name || ''), type: safeType(m.type), w: +m.w || 0, h: +m.h || 0, size: +m.size || 0, taken_at: +m.taken_at || upd, created_at: +m.created_at || upd,
       caption: String(m.caption || ''), star: !!m.star, rot: +m.rot || 0, deleted: false, updated_at: upd, srv: upd, seen: stamp, have: false, th: false, up: true, tag: String(m.tag || ''), pk: String(m.pk || ''), st: m.st === 'gd' ? 'gd' : 'sb', df: String(m.df || ''), dt: String(m.dt || ''), dfs: Array.isArray(m.dfs) ? m.dfs.map(String) : [], kind: m.kind === 'video' ? 'video' : '', chunks: +m.chunks || 0, dur: +m.dur || 0, dn: +m.dn || 0, folder });
@@ -218,7 +227,7 @@ async function dropObj(u, p, name) {
   else { p.owed = p.owed || []; if (!p.owed.includes(name)) p.owed.push(name); const f = owedFail.get(name), n = (f ? f.n : 0) + 1; owedFail.set(name, { n, until: Date.now() + Math.min(3600000, 60000 * Math.pow(4, n - 1)) }); }
   return ok;
 }
-const entryDue = p => p.deleted ? ((p.srv !== 0 || p.up) && p.srv !== p.updated_at) : p.up && p.srv !== p.updated_at;
+const entryDue = p => !p.stub && (p.deleted ? ((p.srv !== 0 || p.up) && p.srv !== p.updated_at) : p.up && p.srv !== p.updated_at);
 // One conditional write of the entry. true: accepted. false: another device wrote first (the entry is pulled again).
 async function writeEntry(p, u) {
   const row = { id: p.id, user_id: u, folder_id: p.folder || null, updated_at: p.updated_at, deleted: !!p.deleted, meta: await sealedMeta(p) };
@@ -302,7 +311,7 @@ async function uploadPhoto(p, u, msg) {
     } else df = await put(full, 'f', undefined, objName(u, p, tag, false), driveName(p, 'f'));
     const th = p.th ? await thumbGet(p.id) : null;
     const dt = th ? await put(th, 't', undefined, objName(u, p, tag, true), driveName(p, 't')) : '';
-    p.st = toDrive ? 'gd' : 'sb'; p.df = df; p.dt = dt; p.dfs = dfs; p.up = true; if (toDrive) p.dn = p.taken_at;
+    p.st = toDrive ? 'gd' : 'sb'; p.df = df; p.dt = dt; p.dfs = dfs; p.up = true; if (toDrive) p.dn = driveWant(p);
   } catch (e) {
     p.tag = was; p.pk = wasPk;
     if (e && e.reconnect) await driveLost();
@@ -356,7 +365,7 @@ async function syncNow() {
         if (!(await ensureSession())) return;
         setSyncState('busy', progressMsg('Uploading', upDone, upTotal, p));
         await uploadPhoto(p, u, progressMsg('Uploading', upDone, upTotal, p));
-        upFail.delete(p.id); persist();
+        upFail.delete(p.id); if (protFolder(p.folder)) await forgetLocal(p); persist();
       } catch (e) {
         upFailed++; upWhy = errText(e);
         if (e instanceof TypeError || navigator.onLine === false || ctl.signal.aborted) break;
@@ -368,7 +377,7 @@ async function syncNow() {
     // own photos still in the Supabase bucket move to Drive: the sealed bytes as they are (no key
     // needed), one photo at a time; the entry then says where they are, and the bucket's copies go
     // once the entry is accepted (owed objects). Stops by itself when nothing is left.
-    const toMove = p => settings.moveToDrive && !p.deleted && p.up && p.st !== 'gd' && !!p.tag;
+    const toMove = p => settings.moveToDrive && !p.deleted && !p.stub && p.up && p.st !== 'gd' && !!p.tag;
     if (settings.moveToDrive && DRIVE && drive && driveTokenOk()) {
       const list = photos.filter(toMove); let i = 0;
       const total = Math.max(+settings.moveTotal || 0, list.length), done0 = total - list.length;      // counted against the whole move, not the pass: a pass that starts over does not reset the number
@@ -385,7 +394,7 @@ async function syncNow() {
             const th = p.th ? await get(objName(u, p, p.tag, true), true) : null;
             const dt = th ? await driveUpload(p, driveName(p, 't'), 't', new Blob([th], { type: 'application/octet-stream' })) : ''; if (dt) made.push(dt);
             p.owed = p.owed || []; for (const n of bucketNames(u, p, p.tag)) if (!p.owed.includes(n)) p.owed.push(n);      // the bucket's copies go after the entry
-            p.st = 'gd'; p.df = df; p.dt = dt; p.dfs = dfs; p.dn = p.taken_at;
+            p.st = 'gd'; p.df = df; p.dt = dt; p.dfs = dfs; p.dn = driveWant(p);
             save({ sync: false });
           } catch (e) { p.owed = p.owed || []; for (const id of made) if (!p.owed.includes('gd:' + id)) p.owed.push('gd:' + id); throw e; }
         } catch (e) {
@@ -400,9 +409,9 @@ async function syncNow() {
     if (DRIVE && drive && driveTokenOk()) {
       let n = 0;
       for (const p of photos) {
-        if (p.deleted || p.st !== 'gd' || !p.up || p.dn === p.taken_at) continue;
+        if (p.deleted || p.stub || p.st !== 'gd' || !p.up || p.dn === driveWant(p)) continue;
         if (stop() || n >= 200) break;
-        try { await driveRename(p); p.dn = p.taken_at; n++; }
+        try { await driveRename(p); p.dn = driveWant(p); n++; }
         catch (e) { if (e && e.reconnect) { await driveLost(); break; } if (e instanceof TypeError || navigator.onLine === false) break; }
       }
       if (n) save({ sync: false });
@@ -440,7 +449,7 @@ async function syncNow() {
     if (!(await persist())) throw new Error('The photo list could not be saved.');
     renderAll();
     let failed = 0, why = '';
-    const needsTh = p => !p.deleted && !p.th && p.up && haveKeyFor(p), needsFull = p => settings.keepAll && !p.deleted && !p.have && p.up && haveKeyFor(p);
+    const needsTh = p => !p.deleted && !p.stub && !protFolder(p.folder) && !p.th && p.up && haveKeyFor(p), needsFull = p => settings.keepAll && !p.deleted && !p.stub && !protFolder(p.folder) && !p.have && p.up && haveKeyFor(p);
     const thTotal = photos.filter(needsTh).length; let thDone = 0;
     for (const p of photos.slice()) {                             // the small pictures of photos added elsewhere
       if (stop()) return;
@@ -474,10 +483,10 @@ async function fetchThumb(p) {
   return fetchShared('t' + p.id, async () => {
     const u = session.uid;
     if (p.st === 'gd') {
-      if (!p.dt) { const b = await fetchFull(p); if (!b) return null; const t = p.kind === 'video' ? await videoPoster(b) : await makeThumb(b); if (!t) return null; if (!p.w && t.w) { p.w = t.w; p.h = t.h; } await thumbPut(p.id, t.blob); p.th = true; persist(); return t.blob; }
+      if (!p.dt) { const b = await fetchFull(p); if (!b) return null; const t = p.kind === 'video' ? await videoPoster(b) : await makeThumb(b); if (!t) return null; if (!p.w && t.w) { p.w = t.w; p.h = t.h; } await keepThumb(p, t.blob); return t.blob; }
       const blob = await openFile(p, await driveGet(p.dt), 't');
       if (p.deleted || passive) return blob;
-      await thumbPut(p.id, blob); p.th = true; persist(); renderHome();
+      await keepThumb(p, blob); renderHome();
       return blob;
     }
     const r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, true));
@@ -485,12 +494,12 @@ async function fetchThumb(p) {
       const b = await fetchFull(p); if (!b) return null;
       const t = p.kind === 'video' ? await videoPoster(b) : await makeThumb(b); if (!t) return null;
       if (!p.w && t.w) { p.w = t.w; p.h = t.h; }
-      await thumbPut(p.id, t.blob); p.th = true; persist(); return t.blob;
+      await keepThumb(p, t.blob); return t.blob;
     }
     if (!r.ok) throw await httpError('Fetching the small picture', r);
     const blob = await openFile(p, await r.arrayBuffer(), 't');
     if (p.deleted || passive) return blob;
-    await thumbPut(p.id, blob); p.th = true; persist(); renderHome();
+    await keepThumb(p, blob); renderHome();
     return blob;
   });
 }
@@ -506,11 +515,12 @@ async function fetchFull(p, msg) {
         if (p.st === 'gd') buf = await driveGet((p.dfs || [])[i]);
         else { const r = await api('GET', '/storage/v1/object/authenticated/lb/' + pieceName(u, p, p.tag, i)); if (!r.ok) throw await httpError('Fetching "' + photoLabel(p) + '"', r); buf = await r.arrayBuffer(); }
         const piece = await openFile(p, buf, 'f', i);
-        if (!p.deleted && !passive) await chunkPut(p.id, i, piece);
+        if (!p.deleted && !passive && !protFolder(p.folder)) await chunkPut(p.id, i, piece);
         parts.push(piece);
       }
       const blob = new Blob(parts, { type: p.type });
       if (p.deleted || passive) return blob;
+      if (protFolder(p.folder)) { protFull.set(p.id, blob); return blob; }
       p.have = true; persist();
       return blob;
     }
@@ -519,6 +529,7 @@ async function fetchFull(p, msg) {
     else { const r = await api('GET', '/storage/v1/object/authenticated/lb/' + objName(u, p, p.tag, false)); if (!r.ok) throw await httpError('Fetching "' + photoLabel(p) + '"', r); buf = await r.arrayBuffer(); }
     const blob = await openFile(p, buf, 'f');
     if (p.deleted || passive) return blob;
+    if (protFolder(p.folder)) { protFull.set(p.id, blob); return blob; }      // a protected folder's picture: in memory only
     await imgPut(p.id, blob); p.have = true; persist();
     return blob;
   });
@@ -629,7 +640,7 @@ async function tidyFolders() {
   // 1. an old folder name becomes a folder of its own (a new key) and the photo moves into it; a
   //    photo whose key is wrapped by the cloud key waits for that key (sign-in and password). A
   //    folder id this device does not know (yet) is never mistaken for a name.
-  for (const p of photos.filter(p => p.folder && !p.deleted)) {
+  for (const p of photos.filter(p => p.folder && !p.deleted && !p.stub)) {
     if (folders.some(f => f.id === p.folder) || idLike(p.folder)) continue;      // checked again for every photo: the list may have moved meanwhile
     if (p.pk && !(session && Vault.hasCloudKey(session.uid))) continue;
     let f = folders.find(x => !x.deleted && x.name === p.folder);
@@ -641,7 +652,7 @@ async function tidyFolders() {
   }
   // 2. a folder named after an id (left by that old double pass) goes; photos in it move to the
   //    folder the id names, or out of every folder
-  for (const f of folders.filter(f => !f.deleted && idLike(f.name))) {
+  for (const f of folders.filter(f => !f.deleted && !f.prot && idLike(f.name))) {
     const target = folders.find(x => x.id === f.name && !x.deleted);
     let ok = true;
     for (const p of photos.filter(p => !p.deleted && p.folder === f.id)) { try { await moveToFolder(p, target ? target.id : ''); } catch (e) { ok = false; } }
@@ -650,7 +661,7 @@ async function tidyFolders() {
   // 3. two folders with one name: the older one stays (decided alike on every device), the photos of
   //    the other move into it
   const keep = new Map();
-  for (const f of folders.filter(f => !f.deleted).sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1))) {
+  for (const f of folders.filter(f => !f.deleted && !f.prot).sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1))) {
     const k = keep.get(f.name); if (!k) { keep.set(f.name, f); continue; }
     let ok = true;
     for (const p of photos.filter(p => !p.deleted && p.folder === f.id)) { try { await moveToFolder(p, k.id); } catch (e) { ok = false; } }
@@ -665,7 +676,8 @@ async function tidyFolders() {
 const folderInfoAad = id => 'lb|folderinfo|' + id;
 const folderDue = f => f.srv !== f.updated_at;
 async function folderRow(f, u) {
-  return { id: f.id, user_id: u, info: await Vault.fsealJson(f.id, { name: f.name, u: f.updated_at, del: !!f.deleted }, folderInfoAad(f.id)), wrap: await Vault.wrapFolderKey(f.id, u), pwrap: '', psalt: '', piter: 0, updated_at: f.updated_at, deleted: !!f.deleted };
+  const info = { name: f.name, u: f.updated_at, del: !!f.deleted }, prev = Vault.folderPrevB64(f.id); if (prev) info.prev = prev;
+  return { id: f.id, user_id: u, info: await Vault.fsealJson(f.id, info, folderInfoAad(f.id)), wrap: f.prot ? '' : await Vault.wrapFolderKey(f.id, u), pwrap: f.prot ? f.pwrap : '', psalt: f.prot ? f.psalt : '', piter: f.prot ? f.piter : 0, updated_at: f.updated_at, deleted: !!f.deleted };
 }
 async function writeFolder(f, u) {
   const row = await folderRow(f, u), headers = { 'Content-Type': 'application/json', Prefer: 'return=representation' };
@@ -679,21 +691,31 @@ async function writeFolder(f, u) {
   return true;
 }
 async function applyFolderRow(row, u) {
-  const id = String(row.id), upd = +row.updated_at || 0, del = !!row.deleted, stamp = +row.synced_at || 0;
+  const id = String(row.id), upd = +row.updated_at || 0, del = !!row.deleted, stamp = +row.synced_at || 0, prot = !row.wrap && !!row.pwrap;
+  let f = folders.find(x => x.id === id);
+  if (prot && f && !f.prot) await closeLocally(f);                  // protected on another device: its key and its photos leave this one
+  if (prot && f) { f.prot = true; f.pwrap = String(row.pwrap); f.psalt = String(row.psalt || ''); f.piter = +row.piter || 0; }
+  if (!prot && f && f.prot && row.wrap) { f.prot = false; f.pwrap = ''; f.psalt = ''; f.piter = 0; }      // protection taken off elsewhere
   if (!Vault.hasFolderKey(id)) {
-    if (!row.wrap) return 'locked';                              // a protected folder: its key waits for the passphrase
+    if (prot) {                                                    // its key waits for the passphrase: only what the row says in the clear
+      if (!f) { f = migrateFolder({ id, name: '', created_at: upd, updated_at: upd, deleted: del, srv: upd, seen: stamp, prot: true, pwrap: String(row.pwrap), psalt: String(row.psalt || ''), piter: +row.piter || 0 }); folders.push(f); fsnap[id] = fsigOf(f); return 'new'; }
+      f.seen = stamp; if (upd > f.updated_at) { f.deleted = del; f.updated_at = upd; f.srv = upd; } else if (upd === f.updated_at) f.srv = upd;
+      fsnap[id] = fsigOf(f); return 'locked';
+    }
+    if (!row.wrap) return 'locked';
     await Vault.keepFolderKey(id, await Vault.unwrapFolderKey(row.wrap, u, id), u);
   }
   const m = await Vault.fopenJson(id, row.info, folderInfoAad(id));
   if (+m.u !== upd || !!m.del !== del) throw new Error('folder entry does not match its seal');
-  let f = folders.find(x => x.id === id);
-  if (!f) { f = migrateFolder({ id, name: String(m.name || ''), created_at: upd, updated_at: upd, deleted: del, srv: upd, seen: stamp }); folders.push(f); fsnap[id] = fsigOf(f); return 'new'; }
+  if (m.prev && !Vault.folderPrevB64(id)) await Vault.holdFolderKey(id, Vault.folderKeyRaw(id), Vault.unb64(m.prev));
+  if (!f) { f = migrateFolder({ id, name: String(m.name || ''), created_at: upd, updated_at: upd, deleted: del, srv: upd, seen: stamp, prot, pwrap: prot ? String(row.pwrap) : '', psalt: prot ? String(row.psalt || '') : '', piter: prot ? +row.piter || 0 : 0 }); folders.push(f); fsnap[id] = fsigOf(f); return 'new'; }
   const before = fsigOf(f), wasDeleted = f.deleted;
   f.seen = stamp;
-  if (upd > f.updated_at) { f.name = String(m.name || ''); f.deleted = del; f.updated_at = upd; f.srv = upd; if (del && !wasDeleted) { for (const p of photos) if (p.folder === id && !p.deleted) { /* the other device moved them out; their entries follow */ } if (folderFilter === id) folderFilter = ''; } }
+  if (!f.name && m.name) f.name = String(m.name);                   // an opened protected folder learns its name
+  if (upd > f.updated_at) { f.name = String(m.name || ''); f.deleted = del; f.updated_at = upd; f.srv = upd; if (del && !wasDeleted && folderFilter === id) folderFilter = ''; }
   else if (upd === f.updated_at) { if (!!m.del !== !!f.deleted) { if (del) { f.deleted = true; f.srv = upd; } else f.srv = -1; } else if (String(m.name || '') !== f.name) { if (String(m.name || '') > f.name) { f.name = String(m.name || ''); f.srv = upd; } else f.srv = -1; } else f.srv = upd; }
   else f.srv = -1;
-  if (fsnap[id] === before) fsnap[id] = fsigOf(f);
+  if (fsnap[id] === before || f.prot) fsnap[id] = fsigOf(f);
   return 'ok';
 }
 // pull the folders changed since the last visit, push the ones changed here; true when the bookmark moved
@@ -722,4 +744,95 @@ async function syncFolders(u) {
     }
   }
   return moved;
+}
+
+// ---------- protected folders ----------
+// A folder can be bound to a passphrase of its own. Its key then rests on no device and in the
+// cloud only wrapped by that passphrase; it is held in memory while the folder is open and goes
+// with the page (the lock restarts it). Closed, the device keeps of its photos only what sync
+// needs (no name, no date, no picture). Protecting gives the folder a new key, so a device that
+// knew the old one gets nothing new; the old key travels sealed inside the folder's row, so that
+// entries not yet resealed still open.
+const protFull = new Map();                                        // an open protected folder's full pictures, in memory only
+async function keepThumb(p, blob) { if (protFolder(p.folder)) return; await thumbPut(p.id, blob); p.th = true; persist(); }
+// the date a file name in Drive carries: none for a protected folder (-1: the neutral name)
+const driveWant = p => protFolder(p.folder) ? -1 : p.taken_at;
+async function forgetLocal(p) {
+  await idb.del('images', p.id).catch(() => {}); await idb.del('thumbs', p.id).catch(() => {});
+  for (let i = 0; i < (p.chunks || 0); i++) await idb.del('images', chunkKey(p.id, i)).catch(() => {});
+  p.have = false; p.th = false;                                     // the small picture already shown stays in memory for this session
+}
+// the folder closes on this device: its key leaves memory and storage, its photos become stubs
+async function closeLocally(f) {
+  Vault.forgetFolderKey(f.id); await Vault.forgetLocalFolderKey(f.id).catch(() => {});
+  if (curPhoto && curPhoto.folder === f.id) closeView();
+  for (let i = 0; i < photos.length; i++) {
+    const p = photos[i]; if (p.folder !== f.id || p.stub) continue;
+    await forgetLocal(p); dropThumbUrl(p.id); protFull.delete(p.id);
+    if (p.up && p.srv === p.updated_at) { photos[i] = migrate(stubOf(p)); snap[p.id] = sigOf(photos[i]); }
+  }
+  f.name = ''; fsnap[f.id] = fsigOf(f);
+  if (folderFilter === f.id) folderFilter = '';
+}
+async function lockFolder(f) { await closeLocally(f); persist(); renderAll(); }
+// open: the passphrase unwraps the key from the folder's row; then every entry of the folder is read again
+async function unlockFolder(f, pass) {
+  if (!session || !Vault.hasCloudKey(session.uid)) throw new Error('Opening a protected folder needs cloud sync: sign in and enter the encryption password first.');
+  if (!(await ensureSession())) throw new Error('Not signed in.');
+  const u = session.uid;
+  const r = await api('GET', '/rest/v1/lb_folders?select=id,info,wrap,pwrap,psalt,piter,updated_at,deleted,synced_at&user_id=eq.' + u + '&id=eq.' + encodeURIComponent(f.id));
+  if (!r.ok) throw await httpError('Reading the folder', r);
+  const row = (await r.json())[0]; if (!row || !row.pwrap) throw new Error('This folder is not protected in the cloud.');
+  const raw = await Vault.unwrapFolderKeyPass(f.id, pass, row, u);
+  await Vault.holdFolderKey(f.id, raw);
+  try { await applyFolderRow(row, u); } catch (e) { Vault.forgetFolderKey(f.id); throw new Error('The folder could not be opened: ' + errText(e)); }
+  let after = null;
+  for (;;) {                                                       // every entry of this folder, from the start: the stubs are filled
+    const where = '&folder_id=eq.' + encodeURIComponent(f.id) + (after ? '&or=(synced_at.gt.' + after.s + ',and(synced_at.eq.' + after.s + ',id.gt.' + encodeURIComponent(after.id) + '))' : '');
+    const q = await api('GET', '/rest/v1/lb_photos?select=id,meta,updated_at,deleted,synced_at' + where + '&order=synced_at.asc,id.asc&limit=500');
+    if (!q.ok) throw await httpError('Reading the folder', q);
+    const rows = await q.json();
+    for (const x of rows) { try { await applyRow(x, f.id); } catch (e) {} }
+    if (rows.length < 500) break;
+    const last = rows[rows.length - 1]; after = { s: +last.synced_at || 0, id: String(last.id) };
+  }
+  renderAll();
+}
+// protect: a new key bound to the passphrase; the row is the commit point, the photos' keys follow
+async function protectFolder(f, pass) {
+  if (!session || !Vault.hasCloudKey(session.uid)) throw new Error('Protected folders need cloud sync: sign in and set the encryption password first.');
+  if (!(await ensureSession())) throw new Error('Not signed in.');
+  if (!Vault.hasFolderKey(f.id)) throw new Error('The key of this folder is not on this device.');
+  const inIt = photos.filter(p => !p.deleted && !p.stub && p.folder === f.id);
+  if (inIt.some(p => !p.up || p.srv !== p.updated_at) || f.srv !== f.updated_at) throw new Error('Some photos of this folder are not in the cloud yet. Wait until sync is done, then try again.');
+  for (let k = 0; syncing && k < 300; k++) await new Promise(r => setTimeout(r, 100));
+  if (syncing) throw new Error('Sync is busy. Try again in a moment.');
+  const u = session.uid, oldRaw = Vault.folderKeyRaw(f.id), newRaw = Vault.newFolderKey();
+  const pw = await Vault.wrapFolderKeyPass(f.id, newRaw, pass, u);
+  const was = { prot: f.prot, pwrap: f.pwrap, psalt: f.psalt, piter: f.piter, updated_at: f.updated_at };
+  await Vault.holdFolderKey(f.id, newRaw, oldRaw);
+  f.prot = true; f.pwrap = pw.pwrap; f.psalt = pw.psalt; f.piter = pw.piter; f.updated_at = Math.max(Date.now(), f.updated_at + 1); fsnap[f.id] = fsigOf(f);
+  let ok = false;
+  try { ok = await writeFolder(f, u); } catch (e) { ok = false; }
+  if (!ok) {                                                        // nothing changed in the cloud: back to how it was
+    await Vault.holdFolderKey(f.id, oldRaw); Object.assign(f, was); fsnap[f.id] = fsigOf(f);
+    throw new Error('The cloud did not take the change. Try again when you are online.');
+  }
+  await Vault.forgetLocalFolderKey(f.id);                           // from here the key rests nowhere on this device
+  for (const p of inIt) {                                           // the photos' keys under the new folder key (the old one still opens them meanwhile)
+    if (p.pk) { const raw = await Vault.funwrapItemKey(f.id, p.pk, 'lb|pk|' + p.id); p.pk = await Vault.fwrapItemKey(f.id, raw, 'lb|pk|' + p.id); }
+    await forgetLocal(p);
+  }
+  save(); renderAll(); syncNow();
+}
+// take the protection off: the key is wrapped by the cloud key again and kept on the device
+async function unprotectFolder(f) {
+  if (!session || !Vault.hasCloudKey(session.uid) || !Vault.hasFolderKey(f.id)) throw new Error('Open the folder first.');
+  if (!(await ensureSession())) throw new Error('Not signed in.');
+  const u = session.uid, was = { prot: f.prot, pwrap: f.pwrap, psalt: f.psalt, piter: f.piter, updated_at: f.updated_at };
+  f.prot = false; f.pwrap = ''; f.psalt = ''; f.piter = 0; f.updated_at = Math.max(Date.now(), f.updated_at + 1); fsnap[f.id] = fsigOf(f);
+  let ok = false; try { ok = await writeFolder(f, u); } catch (e) { ok = false; }
+  if (!ok) { Object.assign(f, was); fsnap[f.id] = fsigOf(f); throw new Error('The cloud did not take the change. Try again when you are online.'); }
+  await Vault.keepFolderKey(f.id, Vault.folderKeyRaw(f.id), u);
+  persist(); renderAll(); syncNow();
 }
