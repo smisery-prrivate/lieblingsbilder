@@ -146,7 +146,7 @@ async function submitKey(pw, pw2, hint) {
       const env = await Vault.rewrapEnvelope(pw, session.uid);
       const r = await api('PATCH', '/rest/v1/lb_keys?user_id=eq.' + session.uid, { headers: json, body: JSON.stringify(env) });
       if (!r.ok) throw await httpError('Saving the key', r);
-      keyNeed = ''; toast('Encryption password changed'); renderSyncBox(); return;
+      keyNeed = ''; await keyfileDirty(); toast('Encryption password changed'); renderSyncBox(); syncNow(); return;      // the recovery key file carries the new envelope
     } else await Vault.openEnvelope(keyEnv, pw, session.uid);
     keyNeed = ''; keyEnv = null; setSyncState(''); toast('Encrypted sync is on'); renderAll(); syncNow();
   } catch (e) { hint.textContent = errText(e); }
@@ -445,6 +445,7 @@ async function syncNow() {
     }
     for (const p of photos) if (p.owed && p.owed.length) for (const name of p.owed.slice()) { if (stop()) return; const f = owedFail.get(name); if (f && Date.now() < f.until) continue; await dropObj(u, p, name); }
     if (stop()) return;
+    await writeKeyFile(u); if (stop()) return;                     // the recovery key file in Drive, when its content changed
     try { localStorage.setItem(OK_KEY, String(Date.now())); } catch (e) {}
     if (!(await persist())) throw new Error('The photo list could not be saved.');
     renderAll();

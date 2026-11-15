@@ -10,7 +10,8 @@
    stored encrypted like everything else; when it has run out, the app reconnects by itself (a
    redirect without any screen) only without a lock and while nothing would be lost; otherwise
    the menu and the status line ask for a tap. Every device that wants to show these photos
-   connects its own Google account (the same one). */
+   connects its own Google account (the same one). Beside the photos lies one small recovery key
+   file, so that Drive and the encryption password alone bring every photo back (app-keys.js). */
 const DRIVE = CFG.googleClientId ? { clientId: String(CFG.googleClientId), api: 'https://www.googleapis.com', auth: 'https://accounts.google.com/o/oauth2/v2/auth', revoke: 'https://oauth2.googleapis.com/revoke', scope: 'https://www.googleapis.com/auth/drive.file', folder: 'Lieblingsbilder' } : null;
 const DRIVE_STATE = 'lieblingsbilder-drive', DRIVE_NONCE_KEY = 'lb.driveNonce', DRIVE_SILENT_KEY = 'lb.driveSilent', DRIVE_SILENT_N = 'lb.driveSilentN', DRIVE_MULTIPART_MAX = 5 * 1024 * 1024;
 let drive = null;                 // { email, token, exp, folderId } once connected; stored encrypted in meta 'drive'
@@ -54,7 +55,7 @@ async function driveAdopt(qp) {
   const token = qp.get('access_token'), ttl = +qp.get('expires_in') || 3600;
   if (!token || !/^[\w.\-]+$/.test(token)) return 'Google sent no usable token.';
   if (ttl <= 120) { driveState = 'reconnect'; return ''; }
-  const nd = { email: drive ? drive.email : '', token, exp: Date.now() + ttl * 1000, folderId: drive ? drive.folderId : '' };
+  const nd = { email: drive ? drive.email : '', token, exp: Date.now() + ttl * 1000, folderId: drive ? drive.folderId : '', keyId: drive ? drive.keyId || '' : '', keySig: drive ? drive.keySig || '' : '', keyAt: drive ? drive.keyAt || 0 : 0 };      // the key file's id and state survive a reconnect
   try {
     const r = await driveApi('GET', '/drive/v3/about?fields=user(emailAddress)', null, nd);
     nd.email = r.user && r.user.emailAddress || nd.email;
@@ -108,9 +109,10 @@ async function driveFolder() {
   drive.folderId = id; await storeDrive(); return id;
 }
 // a file larger than the one-request limit goes up in the resumable form: the metadata first, then the body to the address Google names
-async function driveUploadBody(meta, blob) {
-  if (blob.size <= DRIVE_MULTIPART_MAX) return driveApi('POST', '/upload/drive/v3/files?uploadType=multipart&fields=id', multipart(meta, blob));
-  const r = await fetch(DRIVE.api + '/upload/drive/v3/files?uploadType=resumable&fields=id', { method: 'POST', headers: { Authorization: 'Bearer ' + drive.token, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/octet-stream', 'X-Upload-Content-Length': String(blob.size) }, body: JSON.stringify(meta), credentials: 'omit', cache: 'no-store' });
+async function driveUploadBody(meta, blob, fileId) {
+  const method = fileId ? 'PATCH' : 'POST', base = '/upload/drive/v3/files' + (fileId ? '/' + encodeURIComponent(fileId) : '');      // with a file id the content of that file is replaced
+  if (blob.size <= DRIVE_MULTIPART_MAX) return driveApi(method, base + '?uploadType=multipart&fields=id', multipart(meta, blob));
+  const r = await fetch(DRIVE.api + base + '?uploadType=resumable&fields=id', { method, headers: { Authorization: 'Bearer ' + drive.token, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/octet-stream', 'X-Upload-Content-Length': String(blob.size) }, body: JSON.stringify(meta), credentials: 'omit', cache: 'no-store' });
   if (r.status === 401) { const e = new Error('reconnect'); e.reconnect = true; throw e; }
   const loc = r.headers.get('Location'); if (!r.ok || !loc) throw new Error('Google Drive answered ' + r.status + ' to the upload request');
   const up = await fetch(loc, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: blob, credentials: 'omit', cache: 'no-store' });
@@ -126,9 +128,11 @@ function multipart(meta, blob) {
 // like the app sorts ("2024-07-15 10-30-00 IMG_1234.jpg.lb"); the file's own times in Drive are
 // set to the date taken too. That is the one thing Google learns about a photo: when it was taken.
 // The app never finds a file by its name (it keeps the ids), so a name may change at any time.
-function driveName(p, kind, idx) {
-  if (protFolder(p.folder)) return p.id + (kind === 't' ? '.t' : idx != null ? '.' + idx : '') + '.lb';      // a protected folder's files say nothing about their photos
-  const d = new Date(p.taken_at), stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+function driveName(p, kind, idx) { return driveNameFor(p, kind, idx, driveWant(p)); }
+// the name for a given date taken; takenAt -1: the neutral name (a protected folder, and the names of releases before v18)
+function driveNameFor(p, kind, idx, takenAt) {
+  if (takenAt < 0) return p.id + (kind === 't' ? '.t' : idx != null ? '.' + idx : '') + '.lb';      // a protected folder's files say nothing about their photos
+  const d = new Date(takenAt), stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
   const base = (p.name || '').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim().slice(0, 60), ext = extOf(p.type);
   const head = stamp + (base ? ' ' + base : '');
   if (kind === 't') return head + '.thumb.jpg.lb';
@@ -172,7 +176,7 @@ function renderDriveBox() {
   const left = photos.filter(p => !p.deleted && p.up && p.st !== 'gd').length;
   const line = driveState === 'reconnect' ? 'The connection has run out. Tap Reconnect to continue.' : driveState === 'error' ? driveMsg : n + (n === 1 ? ' photo' : ' photos') + ' in Drive' + (waiting ? ' · ' + waiting + ' waiting' : '');
   box.innerHTML = '<div class="statecard' + (err ? ' err' : '') + '"><div class="t">Google Drive · ' + esc(drive.email || '') + '</div><div class="s">Folder "' + esc(DRIVE.folder) + '" · ' + esc(line) + '</div></div>' +
-    (drive.folderId ? '<a id="driveOpen" class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="https://drive.google.com/drive/folders/' + encodeURIComponent(drive.folderId) + '" target="_blank" rel="noopener">Open the folder in Google Drive</a>' : '<div class="hint">The folder in Drive is made with the first upload; its link appears here then.</div>') +
+    (drive.folderId ? '<a id="driveOpen" class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="https://drive.google.com/drive/folders/' + encodeURIComponent(drive.folderId) + '" target="_blank" rel="noopener">Open the folder in Google Drive</a>' : '<div class="hint">The folder in Drive is made with the first upload; its link appears here then.</div>') + keyfileLine() +
     (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '<button id="driveNowBtn" class="btn">Sync now</button>') +
     (left ? (settings.moveToDrive ? '<div class="hint">Moving to Drive: ' + Math.max(0, (+settings.moveTotal || left) - left) + ' of ' + Math.max(+settings.moveTotal || 0, left) + ' done, ' + left + ' to go (continues on its own)</div>' : '<button id="driveMove" class="btn">Move ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive</button>') : '') +
     '<button id="driveOff" class="btn quiet">Disconnect Google Drive</button>';

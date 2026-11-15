@@ -80,6 +80,7 @@ renamed so that both apps can live on one origin. The parts are kept apart on pu
 | **Per-photo key** (random, carried wrapped in the photo's entry) | that photo's full picture and thumbnail, through two derived keys | one photo; thumbnail keys open no full pictures |
 | **Folder key** (random, one per folder; on the device sealed by the local key, in the cloud sealed by the cloud key) | that folder's entries and per-photo keys | that folder, no other folder, nothing outside folders |
 | **Protected folder key** (in the cloud only under its own passphrase; on a device only in memory, while open) | that folder | nothing: the account, the encryption password and the unlocked phone together still do not open it |
+| **Key file in Drive** (`lieblingsbilder-keys.lb`) | the password envelope and the sealed index | nothing without the encryption password; with it the collection, as with the cloud: it adds no way in, it takes the Supabase cloud out of the chain of what is needed to restore |
 | **Server** | ciphertext, sizes, stamps | cannot read, forge or swap: files carry the photo id, tag and kind inside the encryption |
 
 Honest limits, the same as in Snapdoc: a web page cannot scrub browser storage files, which is why
@@ -107,6 +108,8 @@ restarts the page so no decrypted picture stays in memory.
 | `app-lock.js` | Lock screen, the menu and the small sheets |
 | `app-sync.js` | Sign-in, encryption password, sync loop, downloads on demand, folders |
 | `app-drive.js` | Google Drive: the connection and the files of own photos |
+| `app-keys.js` | The recovery key file in Drive (written after a sync pass when its content changed) |
+| `restore.html` | Stand-alone restore from the Drive folder and the password, no server, no app needed |
 | `app-boot.js` | One active window, start-up order, updates, housekeeping |
 | `sw.js` | Offline shell (one complete release) and the share-sheet receiver |
 | `supabase-schema.sql` | Tables, policies and the private bucket (run once, safe to run again) |
@@ -152,6 +155,26 @@ that were uploaded to the Supabase bucket before Drive was connected move over o
 entry then names Drive, and the bucket's copies go once the entry is accepted; it continues on
 its own across restarts until nothing is left.
 
+**Drive alone is a backup (since v20).** The keys that open the Drive files travel in the
+Supabase entries, so without Supabase the Drive folder would be noise. Therefore the app keeps
+one small file beside the photos, `lieblingsbilder-keys.lb` (`app-keys.js`): the cloud key's
+password envelope (the same row the cloud holds, PBKDF2 600,000 rounds) and, sealed with the cloud
+key, the list of photos with their wrapped per-photo keys, the folders with their wrapped keys and
+the names the files carry in Drive. A protected folder appears in that list only as ids and
+wrapped keys (which open nothing); its names and dates are a part of their own, sealed with the
+folder's key under its passphrase, exactly as in the cloud. The file is rewritten at the end of a
+sync pass whenever its content changed (a photo, a move, a folder, a date, a password change) and
+is the same file for every device; a device on which a protected folder is closed carries that
+folder's part over from the file as it is. Without the encryption password the file gives nothing
+away. `restore.html` is the other half: a single page without any server (CSP `connect-src
+'none'`) that takes the folder as downloaded from Drive (its zips, read in place, zip64 and
+deflate included, or the unpacked folder) and the password, opens the key file, lists what is
+there and what is missing, asks for the passphrase of each protected folder, and writes the
+pictures back, named by date and original name, one folder per folder of the app, into a folder
+of the PC (Chrome, Edge) or as downloads. A video is put together from its pieces. So the owner
+needs, in the worst case, only three things: the Drive folder, the password, and this page (it
+lives in the repository and at the app's address; a copy on a USB stick works too).
+
 Set-up (once, by the owner), as for Snapdoc: Google Cloud Console → project → enable the Google
 Drive API → OAuth consent screen (external, scope `.../auth/drive.file`) → Credentials → OAuth
 client ID, type "Web application", authorised JavaScript origin `https://smisery-prrivate.github.io`,
@@ -185,7 +208,8 @@ thousands of photos a year at 2–5 MB each is several GB a year.
 
 - **Supabase Storage**: 1 GB free; Pro is about USD 25 a month for 100 GB.
 - **Google Drive as the file store** (built in v4, see above): the owner's own photos, encrypted;
-  15 GB free, 100 GB for about EUR 2 a month.
+  15 GB free, 100 GB for about EUR 2 a month. Since v20 a backup on its own: the key file beside
+  the photos and `restore.html` bring everything back without the app or Supabase.
 - **Proton Drive**: no interface for third-party web apps (no OAuth, no public API); a static web
   app cannot write to it. Not an option unless Proton opens one.
 
@@ -199,6 +223,13 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v20 (2026-11-15): Drive alone is a backup: the recovery key file `lieblingsbilder-keys.lb` beside
+  the photos (the envelope and the sealed index, a protected folder's part under its passphrase,
+  carried over while the folder is closed) and `restore.html`, which turns the downloaded folder
+  (zips read in place) and the password back into pictures on a PC, no server, no app. Tested:
+  written after the first sync, not rewritten without a change, rewritten after a move, the
+  protected part carried over, a wrong password and a wrong passphrase refused, four pictures (a
+  video among them) back byte for byte, from loose files and from a deflated zip.
 - v19 (2026-11-08): protected folders (see above), tested across two devices: protect, restart,
   wrong and right passphrase, the other device closing, the old key opening nothing, moving in,
   lock now, protection off.

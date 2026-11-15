@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Lieblingsbilder · Restore from Google Drive</title>
+<style>
+  :root { --bg: #f5f3ee; --ink: #1e1c19; --muted: #8a847b; --accent: #0f766e; --accent-dark: #0b5c56; --card: #fff; --line: #e8e3da; --danger: #b4433a; --danger-bg: #fbe9e6; --ok-bg: #e3f1ee; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; line-height: 1.45; }
+  main { max-width: 720px; margin: 0 auto; padding: 28px 16px 80px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 8px; }
+  .lead { color: var(--muted); margin: 0 0 22px; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .step.off { opacity: .55; pointer-events: none; }
+  p { margin: 6px 0; }
+  .hint { color: var(--muted); font-size: 14px; }
+  .warn { color: var(--danger); }
+  .btn { font: inherit; height: 44px; padding: 0 18px; border: none; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; margin: 6px 8px 6px 0; }
+  .btn:active { background: var(--accent-dark); }
+  .btn.second { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  input[type=password], input[type=text] { font: inherit; height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); width: 100%; max-width: 360px; margin: 6px 8px 6px 0; }
+  label.file { display: inline-block; }
+  input[type=file] { display: none; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: 10px 0 4px; }
+  .bar div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #log { font-size: 13px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; background: var(--bg); border-radius: 10px; padding: 10px; margin-top: 8px; }
+  .ok { background: var(--ok-bg); border-radius: 10px; padding: 10px 12px; }
+  .bad { background: var(--danger-bg); border-radius: 10px; padding: 10px 12px; }
+  code { font-size: 14px; background: var(--bg); padding: 1px 5px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Lieblingsbilder · Restore from Google Drive</h1>
+  <p class="lead">Turns the sealed files of your "Lieblingsbilder" folder in Google Drive back into your pictures, on this computer alone. Nothing is sent anywhere: this page talks to no server and works offline. You need the folder (downloaded from Drive, as a zip or unpacked) and your encryption password.</p>
+
+  <section class="step" id="s1">
+    <h2>1. The files from Drive</h2>
+    <p class="hint">In Google Drive, right-click the folder "Lieblingsbilder" and choose Download. Drive gives you one or more zip files; choose them all here (or the unpacked folder). The folder holds the key file <code>lieblingsbilder-keys.lb</code> and one <code>.lb</code> file per picture.</p>
+    <label class="file"><span class="btn second" role="button" tabindex="0">Choose the zip file(s)</span><input id="zipIn" type="file" multiple accept=".zip,.lb,application/zip"></label>
+    <label class="file"><span class="btn second" role="button" tabindex="0">Choose the unpacked folder</span><input id="dirIn" type="file" webkitdirectory multiple></label>
+    <p id="filesInfo" class="hint"></p>
+  </section>
+
+  <section class="step off" id="s2">
+    <h2>2. Your encryption password</h2>
+    <p class="hint">The one you chose when you turned on encrypted sync in the app. It is used only here, in this browser, to open the key file.</p>
+    <input id="pw" type="password" autocomplete="off" placeholder="Encryption password">
+    <button id="unlock" class="btn">Open the key file</button>
+    <p id="pwHint" class="hint"></p>
+  </section>
+
+  <section class="step off" id="s3">
+    <h2>3. What is in the backup</h2>
+    <div id="summary"></div>
+    <div id="protList"></div>
+  </section>
+
+  <section class="step off" id="s4">
+    <h2>4. Restore</h2>
+    <p class="hint">Pictures are written as they were, named by the date taken and their original name, one folder per folder of the app. Photos of a protected folder are included once it is opened above.</p>
+    <button id="toDir" class="btn">Choose a folder on this computer and restore into it</button>
+    <button id="toDl" class="btn second">Download the pictures one by one</button>
+    <p id="dirHint" class="hint"></p>
+    <div class="bar"><div id="barFill"></div></div>
+    <p id="progress" class="hint"></p>
+    <div id="result"></div>
+    <div id="log" hidden></div>
+  </section>
+</main>
+<script>
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id), te = new TextEncoder(), td = new TextDecoder();
+  const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const KEYFILE = 'lieblingsbilder-keys.lb';
+  const pad = n => String(n).padStart(2, '0');
+  const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/heic': 'heic', 'image/heif': 'heif', 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/3gpp': '3gp', 'video/x-matroska': 'mkv' };
+
+  // ---------- the vault's primitives, as in vault.js ----------
+  const importAes = raw => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  async function openWith(key, buf, aad) { const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf); return crypto.subtle.decrypt({ name: 'AES-GCM', iv: u8.subarray(0, 12), additionalData: te.encode(aad || '') }, key, u8.subarray(12)); }
+  async function pbkdfKey(secret, salt, iter) {
+    const base = await crypto.subtle.importKey('raw', te.encode(String(secret).normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  async function hkdfItem(raw, kind) {
+    const base = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: te.encode('lieblingsbilder-item-' + kind) }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  const openJson = async (key, s, aad) => JSON.parse(td.decode(await openWith(key, unb64(s), aad)));
+
+  // ---------- a zip, read in place (nothing unpacked to memory until a file is needed) ----------
+  // Only what Drive's zips need: the central directory (zip64 too), stored or deflated entries.
+  async function zipEntries(file) {
+    const tail = new DataView(await file.slice(Math.max(0, file.size - 65557)).arrayBuffer()), tailOff = Math.max(0, file.size - 65557);
+    let eocd = -1;
+    for (let i = tail.byteLength - 22; i >= 0; i--) if (tail.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error(file.name + ' is not a zip file');
+    let count = tail.getUint16(eocd + 10, true), cdSize = tail.getUint32(eocd + 12, true), cdOff = tail.getUint32(eocd + 16, true);
+    if (count === 0xffff || cdSize === 0xffffffff || cdOff === 0xffffffff) {                       // zip64: the locator sits just before the end record
+      const loc = eocd - 20;
+      if (loc >= 0 && tail.getUint32(loc, true) === 0x07064b50) {
+        const recOff = Number(tail.getBigUint64(loc + 8, true)), rec = new DataView(await file.slice(recOff, recOff + 56).arrayBuffer());
+        if (rec.getUint32(0, true) !== 0x06064b50) throw new Error(file.name + ': the zip64 record is damaged');
+        count = Number(rec.getBigUint64(32, true)); cdSize = Number(rec.getBigUint64(40, true)); cdOff = Number(rec.getBigUint64(48, true));
+      }
+    }
+    const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer()), out = [];
+    let p = 0;
+    for (let n = 0; n < count && p + 46 <= cd.byteLength; n++) {
+      if (cd.getUint32(p, true) !== 0x02014b50) break;
+      const method = cd.getUint16(p + 10, true), nameLen = cd.getUint16(p + 28, true), extraLen = cd.getUint16(p + 30, true), commentLen = cd.getUint16(p + 32, true);
+      let csize = cd.getUint32(p + 20, true), usize = cd.getUint32(p + 24, true), off = cd.getUint32(p + 42, true);
+      const name = td.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nameLen));
+      let q = p + 46 + nameLen; const qEnd = q + extraLen;
+      while (q + 4 <= qEnd) {                                                                         // the zip64 extra field carries the real sizes and offset
+        const id = cd.getUint16(q, true), len = cd.getUint16(q + 2, true); let r = q + 4;
+        if (id === 1) { if (usize === 0xffffffff) { usize = Number(cd.getBigUint64(r, true)); r += 8; } if (csize === 0xffffffff) { csize = Number(cd.getBigUint64(r, true)); r += 8; } if (off === 0xffffffff) { off = Number(cd.getBigUint64(r, true)); r += 8; } }
+        q += 4 + len;
+      }
+      if (!name.endsWith('/')) out.push({ name, method, csize, usize, off, file });
+      p = qEnd + commentLen;
+    }
+    return out;
+  }
+  async function zipRead(e) {
+    const lh = new DataView(await e.file.slice(e.off, e.off + 30).arrayBuffer());
+    if (lh.getUint32(0, true) !== 0x04034b50) throw new Error('damaged zip entry ' + e.name);
+    const start = e.off + 30 + lh.getUint16(26, true) + lh.getUint16(28, true), blob = e.file.slice(start, start + e.csize);
+    if (e.method === 0) return blob.arrayBuffer();
+    if (e.method !== 8) throw new Error('zip method ' + e.method + ' is not supported (' + e.name + ')');
+    if (typeof DecompressionStream !== 'function') throw new Error('this browser cannot unpack zip files here: unpack the zip first and choose the folder');
+    return new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+  }
+
+  // ---------- state ----------
+  const sources = new Map();                // file name (without folders) -> { size, read: () => ArrayBuffer }
+  let keyfile = null, CK = null, index = null, uidK = '', folderKeys = new Map(), protOpen = new Map(), running = false;
+  const base = n => n.split('/').pop().split('\\').pop();
+  const setStep = (id, on) => $(id).classList.toggle('off', !on);
+
+  async function takeFiles(list) {
+    sources.clear(); keyfile = null; CK = null; index = null; folderKeys.clear(); protOpen.clear();
+    $('summary').textContent = ''; $('protList').textContent = ''; $('pwHint').textContent = ''; $('result').textContent = ''; $('log').hidden = true; $('log').textContent = '';
+    setStep('s2', false); setStep('s3', false); setStep('s4', false);
+    let zips = 0, bad = [];
+    for (const f of list) {
+      if (/\.zip$/i.test(f.name)) {
+        try { for (const e of await zipEntries(f)) sources.set(base(e.name), { size: e.usize, read: () => zipRead(e) }); zips++; } catch (err) { bad.push(err.message || String(err)); }
+      } else sources.set(base(f.name), { size: f.size, read: () => f.arrayBuffer() });
+    }
+    const lb = [...sources.keys()].filter(n => n.endsWith('.lb') && n !== KEYFILE).length, hasKey = sources.has(KEYFILE);
+    let msg = (zips ? zips + (zips === 1 ? ' zip file, ' : ' zip files, ') : '') + lb + ' sealed files' + (hasKey ? ', key file found.' : '.');
+    if (!hasKey) msg += ' The key file "' + KEYFILE + '" is missing: without it nothing can be restored. It lies in the Drive folder next to the pictures (the app writes it with every sync).';
+    if (bad.length) msg += ' ' + bad.join(' ');
+    $('filesInfo').textContent = msg; $('filesInfo').className = hasKey ? 'hint' : 'hint warn';
+    if (!hasKey) return;
+    try { keyfile = JSON.parse(td.decode(await sources.get(KEYFILE).read())); if (keyfile.app !== 'lieblingsbilder' || !keyfile.env || !keyfile.index) throw new Error('not a key file'); }
+    catch (e) { $('filesInfo').textContent = 'The key file could not be read: ' + (e.message || e); $('filesInfo').className = 'hint warn'; keyfile = null; return; }
+    setStep('s2', true); $('pw').focus();
+  }
+  $('zipIn').addEventListener('change', e => takeFiles([...e.target.files]));
+  $('dirIn').addEventListener('change', e => takeFiles([...e.target.files]));
+  for (const el of document.querySelectorAll('label.file span')) el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.parentNode.querySelector('input').click(); } });
+
+  // ---------- the password opens the cloud key, the cloud key opens the index ----------
+  async function unlock() {
+    if (!keyfile) return;
+    const pw = $('pw').value; if (!pw) return;
+    $('unlock').disabled = true; $('pwHint').textContent = 'Deriving the key (a few seconds)…';
+    try {
+      const env = keyfile.env, iter = Math.min(5000000, Math.max(100000, +env.iter || 0)), uid = String(keyfile.uid || '');
+      const k = await pbkdfKey(pw, unb64(env.salt), iter);
+      let raw; try { raw = await openWith(k, unb64(env.wrapped), 'lb|ck|env|' + uid); } catch (e) { throw new Error('Wrong encryption password'); }
+      CK = await importAes(raw); uidK = uid;
+      index = await openJson(CK, keyfile.index, 'lb|keys|' + uid);
+      folderKeys.clear();
+      for (const f of index.folders || []) if (!f.prot && f.wrap) { try { folderKeys.set(f.id, await importAes(await openWith(CK, unb64(f.wrap), 'lb|fk|ck|' + uid + '|' + f.id))); } catch (e) {} }
+      $('pwHint').textContent = ''; showSummary(); setStep('s3', true); setStep('s4', true);
+    } catch (e) { $('pwHint').textContent = e.message || String(e); }
+    finally { $('unlock').disabled = false; }
+  }
+  $('unlock').addEventListener('click', unlock);
+  $('pw').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+
+  const fname = f => (f.name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim();
+  // the folder a photo is restored into, and what is to be restored
+  function plan() {
+    const items = [], locked = [];
+    const folderOf = id => { if (!id) return ''; const f = (index.folders || []).find(x => x.id === id); if (!f) return 'Folder ' + id.slice(0, 8); if (f.prot) { const o = protOpen.get(id); return o ? fname({ name: o.name }) || 'Protected folder' : null; } return fname(f) || 'Folder'; };
+    for (const e of index.photos || []) items.push({ e, dir: folderOf(e.f) });
+    for (const f of index.folders || []) if (f.prot) { const o = protOpen.get(f.id); if (o) for (const e of o.photos || []) items.push({ e, dir: folderOf(f.id) }); else locked.push(f); }
+    return { items, locked };
+  }
+  function present(e) { if (e.st !== 'gd' || !e.files || !e.files.length) return false; return e.files.every(x => sources.has(x.n) || (x.id && sources.has(x.id + '.lb'))); }
+  function showSummary() {
+    const { items, locked } = plan();
+    const here = items.filter(i => present(i.e)).length, notDrive = items.filter(i => i.e.st !== 'gd').length, missing = items.length - here - notDrive;
+    const dirs = new Map(); for (const i of items) dirs.set(i.dir, (dirs.get(i.dir) || 0) + 1);
+    const box = $('summary'); box.textContent = '';
+    const p1 = document.createElement('p'); p1.textContent = items.length + (items.length === 1 ? ' photo' : ' photos') + ' listed in the key file' + (keyfile.written ? ' (written ' + new Date(keyfile.written).toLocaleString() + ')' : '') + ', ' + here + ' of them in the files you chose.'; box.appendChild(p1);
+    if (missing) { const p = document.createElement('p'); p.className = 'warn'; p.textContent = missing + (missing === 1 ? ' photo is' : ' photos are') + ' in Drive according to the key file but not among the files you chose (another zip of the same download?).'; box.appendChild(p); }
+    if (notDrive) { const p = document.createElement('p'); p.className = 'hint'; p.textContent = notDrive + (notDrive === 1 ? ' photo was' : ' photos were') + ' still in the Supabase cloud, not in Drive, when the key file was written; they cannot be restored from Drive.'; box.appendChild(p); }
+    const t = document.createElement('table'); const tb = document.createElement('tbody');
+    for (const [d, n] of [...dirs.entries()].sort((a, b) => (a[0] || '').localeCompare(b[0] || ''))) { const tr = document.createElement('tr'); const a = document.createElement('td'); a.textContent = d || 'No folder'; const b = document.createElement('td'); b.textContent = n + (n === 1 ? ' photo' : ' photos'); tr.append(a, b); tb.appendChild(tr); }
+    t.appendChild(tb); box.appendChild(t);
+    const pl = $('protList'); pl.textContent = '';
+    for (const f of locked) {
+      const n = (f.photos || []).length, wrap = document.createElement('div'); wrap.className = 'bad';
+      const p = document.createElement('p'); p.textContent = '🔒 Protected folder with ' + n + (n === 1 ? ' photo' : ' photos') + '. Its photos, names and dates open only with its passphrase.'; wrap.appendChild(p);
+      const inp = document.createElement('input'); inp.type = 'password'; inp.placeholder = 'Passphrase of this folder'; inp.autocomplete = 'off';
+      const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = 'Open'; const hint = document.createElement('span'); hint.className = 'hint';
+      const go = async () => {
+        if (!inp.value) return; btn.disabled = true; hint.textContent = ' Deriving the key…';
+        try {
+          const iter = Math.min(5000000, Math.max(100000, +f.piter || 0)), k = await pbkdfKey(inp.value, unb64(f.psalt), iter);
+          let raw; try { raw = await openWith(k, unb64(f.pwrap), 'lb|fk|pass|' + uidK + '|' + f.id); } catch (e) { throw new Error('Wrong passphrase'); }
+          const fk = await importAes(raw); folderKeys.set(f.id, fk);
+          const part = keyfile.prot && keyfile.prot[f.id];
+          if (!part) throw new Error('The passphrase is right, but the key file holds no list for this folder: it was last written by a device on which the folder was closed. Open the folder in the app once, let it sync, and download the key file again.');
+          protOpen.set(f.id, await openJson(fk, part, 'lb|keys|' + uidK + '|' + f.id));
+          showSummary();
+        } catch (e) { hint.textContent = ' ' + (e.message || e); btn.disabled = false; }
+      };
+      btn.addEventListener('click', go); inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+      wrap.append(inp, btn, hint); pl.appendChild(wrap);
+    }
+  }
+
+  // ---------- opening one photo's files ----------
+  async function itemKey(e) {
+    if (!e.pk) throw new Error('no key in the key file');
+    const k = e.f ? folderKeys.get(e.f) : CK; if (!k) throw new Error('the key of its folder is not open');
+    return new Uint8Array(await openWith(k, unb64(e.pk), 'lb|pk|' + e.id));
+  }
+  async function readSource(x) { const s = sources.get(x.n) || (x.id ? sources.get(x.id + '.lb') : null); if (!s) throw new Error('file ' + x.n + ' is not among the chosen files'); return s.read(); }
+  async function openPiece(key, e, buf, idx) {
+    const u8 = new Uint8Array(await openWith(key, buf, 'lb|file|' + e.id + '|f' + (idx != null ? '|' + idx : ''))), hl = new DataView(u8.buffer, u8.byteOffset, u8.byteLength).getUint32(0);
+    const h = JSON.parse(td.decode(u8.subarray(4, 4 + hl)));
+    if (h.id !== e.id || h.k !== 'f' || (idx != null && h.i !== idx)) throw new Error('the file does not belong to this photo');
+    return u8.subarray(4 + hl);
+  }
+  // sink: { write(u8), close() }
+  async function restoreOne(e, sink) {
+    const key = await hkdfItem(await itemKey(e), 'f');
+    if (e.kind === 'video') { for (let i = 0; i < e.files.length; i++) await sink.write(await openPiece(key, e, await readSource(e.files[i]), i)); }
+    else await sink.write(await openPiece(key, e, await readSource(e.files[0])));
+    await sink.close();
+  }
+  function outName(e) {
+    const d = new Date(e.taken || 0), stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+    let name = fname(e).slice(0, 80); const ext = EXT[e.type] || 'bin';
+    if (!name) name = 'photo.' + ext; else if (!/\.[A-Za-z0-9]{2,5}$/.test(name)) name += '.' + ext;
+    return stamp + ' ' + name;
+  }
+  const log = s => { const el = $('log'); el.hidden = false; el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; };
+  async function run(mode) {
+    if (running || !index) return; running = true;
+    $('toDir').disabled = $('toDl').disabled = true; $('result').textContent = ''; $('log').textContent = ''; $('log').hidden = true;
+    try {
+      const { items } = plan(), todo = items.filter(i => present(i.e)).sort((a, b) => (a.e.taken || 0) - (b.e.taken || 0));
+      let root = null;
+      if (mode === 'dir') {
+        if (!window.showDirectoryPicker) { $('dirHint').textContent = 'This browser cannot write into a folder from a page (Chrome or Edge on a PC can). Use the download button instead.'; return; }
+        try { root = await window.showDirectoryPicker({ mode: 'readwrite' }); } catch (e) { return; }
+      }
+      const dirs = new Map(), used = new Set();
+      const dirFor = async name => { if (!name) return root; if (!dirs.has(name)) dirs.set(name, await root.getDirectoryHandle(name, { create: true })); return dirs.get(name); };
+      const unique = (dir, name) => { let n = name, k = 2; while (used.has(dir + '/' + n)) { n = name.replace(/(\.[^.]+)?$/, ' (' + k++ + ')$1'); } used.add(dir + '/' + n); return n; };
+      let done = 0, failed = 0;
+      for (const it of todo) {
+        const name = unique(it.dir || '', outName(it.e));
+        $('progress').textContent = 'Restoring ' + (done + failed + 1) + ' of ' + todo.length + ' · ' + (it.dir ? it.dir + ' / ' : '') + name; $('barFill').style.width = Math.round((done + failed) / todo.length * 100) + '%';
+        try {
+          if (mode === 'dir') {
+            const dir = await dirFor(it.dir), fh = await dir.getFileHandle(name, { create: true }), w = await fh.createWritable();
+            await restoreOne(it.e, { write: u8 => w.write(u8), close: () => w.close() });
+          } else {
+            const parts = [];
+            await restoreOne(it.e, { write: u8 => { parts.push(new Uint8Array(u8)); }, close: async () => {
+              const url = URL.createObjectURL(new Blob(parts, { type: it.e.type || 'application/octet-stream' })), a = document.createElement('a');
+              a.href = url; a.download = (it.dir ? it.dir + ' - ' : '') + name; document.body.appendChild(a); a.click(); a.remove();
+              await new Promise(r => setTimeout(r, 250)); URL.revokeObjectURL(url);
+            } });
+          }
+          done++;
+        } catch (e) { failed++; log('✗ ' + (it.dir ? it.dir + ' / ' : '') + name + ': ' + (e.message || e)); }
+      }
+      $('barFill').style.width = '100%'; $('progress').textContent = '';
+      const r = $('result'); r.className = failed ? 'bad' : 'ok';
+      r.textContent = done + (done === 1 ? ' picture' : ' pictures') + ' restored' + (failed ? ', ' + failed + ' failed (see below)' : '') + (mode === 'dl' ? '. Your browser may have asked whether this page may download several files.' : '.');
+    } finally { running = false; $('toDir').disabled = $('toDl').disabled = false; }
+  }
+  $('toDir').addEventListener('click', () => run('dir'));
+  $('toDl').addEventListener('click', () => run('dl'));
+  window.lbRestore = { get index() { return index; }, get sources() { return sources; }, plan, present, outName };      // for the tests
+})();
+</script>
+</body>
+</html>
