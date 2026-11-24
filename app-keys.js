@@ -47,8 +47,7 @@ async function sha256hex(s) { const d = new Uint8Array(await crypto.subtle.diges
 // the key file in the Drive folder: the id kept in the Drive record, else found by name
 async function keyfileId() {
   if (drive.keyId) { try { const f = await driveApi('GET', '/drive/v3/files/' + encodeURIComponent(drive.keyId) + '?fields=id,trashed'); if (f && !f.trashed) return drive.keyId; } catch (e) { if (e.reconnect) throw e; } drive.keyId = ''; }
-  const folderId = await driveFolder();
-  const found = await driveApi('GET', '/drive/v3/files?spaces=drive&fields=files(id,createdTime)&q=' + driveQ("name='" + KEYFILE_NAME + "' and '" + folderId + "' in parents and trashed=false"));
+  const found = await driveApi('GET', '/drive/v3/files?spaces=drive&fields=files(id,createdTime)&q=' + driveQ("name='" + KEYFILE_NAME + "' and trashed=false"));      // wherever it lies (the main folder before v21, the archive subfolder since)
   drive.keyId = found.files && found.files.length ? oldest(found.files).id : '';
   return drive.keyId;
 }
@@ -76,8 +75,9 @@ async function writeKeyFile(u) {
       else if (prev && prev.uid === u && prev.prot && typeof prev.prot[f.id] === 'string') file.prot[f.id] = prev.prot[f.id];
     }
     const blob = new Blob([JSON.stringify(file)], { type: 'application/octet-stream' });
-    const meta = { name: KEYFILE_NAME, appProperties: { lb: 'keys' } }; if (!id) meta.parents = [await driveFolder()];
+    const archive = await driveArchive(), meta = { name: KEYFILE_NAME, appProperties: { lb: 'keys' } }; if (!id) meta.parents = [archive];
     const out = await driveUploadBody(meta, blob, id || '');
+    if (id && !drive.keyMoved) { try { const f = await driveApi('GET', '/drive/v3/files/' + encodeURIComponent(id) + '?fields=parents'); if (f && Array.isArray(f.parents) && !f.parents.includes(archive)) await driveMove(id, f.parents[0], archive); drive.keyMoved = true; } catch (e) { if (e && e.reconnect) throw e; } }      // a key file of v20 moves into the subfolder
     drive.keyId = (out && out.id) || id; drive.keySig = sig; drive.keyAt = drive.keyChk = Date.now(); await storeDrive();
     keyfileState = ''; keyfileMsg = '';
   } catch (e) {
@@ -93,5 +93,5 @@ function keyfileLine() {
   if (!drive) return '';
   const when = drive.keyAt ? (() => { const m = Math.floor((Date.now() - drive.keyAt) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.floor(m / 60) + ' h ago' : Math.floor(m / 1440) + ' d ago'; })() : '';
   const state = keyfileState === 'error' ? 'could not be written: ' + keyfileMsg : drive.keyAt ? 'written ' + when : session && Vault.hasCloudKey(session.uid) ? 'written with the next sync' : 'written once cloud sync is on';
-  return '<div class="hint' + (keyfileState === 'error' ? ' warn' : '') + '">Recovery key file "' + esc(KEYFILE_NAME) + '" in the folder: ' + esc(state) + '. With it and your encryption password alone, every photo in Drive can be restored on a PC, without this app or its cloud: download the folder from Drive and open <a href="' + esc(restoreUrl()) + '" target="_blank" rel="noopener">' + esc(restoreUrl()) + '</a>. A protected folder needs its passphrase there too.</div>';
+  return '<div class="hint' + (keyfileState === 'error' ? ' warn' : '') + '">Recovery key file "' + esc(KEYFILE_NAME) + '" in the subfolder "' + esc(DRIVE.archive) + '": ' + esc(state) + '. With it and your encryption password alone, every photo in Drive can be restored on a PC, without this app or its cloud: download the folder from Drive and open <a id="restoreOpen" href="' + esc(restoreUrl()) + '" target="_blank" rel="noopener">' + esc(restoreUrl()) + '</a>. A protected folder needs its passphrase there too.</div>';
 }

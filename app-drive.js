@@ -12,9 +12,9 @@
    the menu and the status line ask for a tap. Every device that wants to show these photos
    connects its own Google account (the same one). Beside the photos lies one small recovery key
    file, so that Drive and the encryption password alone bring every photo back (app-keys.js). */
-const DRIVE = CFG.googleClientId ? { clientId: String(CFG.googleClientId), api: 'https://www.googleapis.com', auth: 'https://accounts.google.com/o/oauth2/v2/auth', revoke: 'https://oauth2.googleapis.com/revoke', scope: 'https://www.googleapis.com/auth/drive.file', folder: 'Lieblingsbilder' } : null;
+const DRIVE = CFG.googleClientId ? { clientId: String(CFG.googleClientId), api: 'https://www.googleapis.com', auth: 'https://accounts.google.com/o/oauth2/v2/auth', revoke: 'https://oauth2.googleapis.com/revoke', scope: 'https://www.googleapis.com/auth/drive.file', folder: 'Lieblingsbilder', archive: 'Archive (encrypted)' } : null;
 const DRIVE_STATE = 'lieblingsbilder-drive', DRIVE_NONCE_KEY = 'lb.driveNonce', DRIVE_SILENT_KEY = 'lb.driveSilent', DRIVE_SILENT_N = 'lb.driveSilentN', DRIVE_MULTIPART_MAX = 5 * 1024 * 1024;
-let drive = null;                 // { email, token, exp, folderId } once connected; stored encrypted in meta 'drive'
+let drive = null;                 // { email, token, exp, folderId, archiveId, keyId, keySig, keyAt } once connected; stored encrypted in meta 'drive'
 let driveState = '', driveMsg = '', driveTried = false;
 let driveGo = url => location.assign(url);           // the redirect to Google (replaced in tests)
 
@@ -55,7 +55,7 @@ async function driveAdopt(qp) {
   const token = qp.get('access_token'), ttl = +qp.get('expires_in') || 3600;
   if (!token || !/^[\w.\-]+$/.test(token)) return 'Google sent no usable token.';
   if (ttl <= 120) { driveState = 'reconnect'; return ''; }
-  const nd = { email: drive ? drive.email : '', token, exp: Date.now() + ttl * 1000, folderId: drive ? drive.folderId : '', keyId: drive ? drive.keyId || '' : '', keySig: drive ? drive.keySig || '' : '', keyAt: drive ? drive.keyAt || 0 : 0 };      // the key file's id and state survive a reconnect
+  const nd = { email: drive ? drive.email : '', token, exp: Date.now() + ttl * 1000, folderId: drive ? drive.folderId : '', archiveId: drive ? drive.archiveId || '' : '', keyId: drive ? drive.keyId || '' : '', keySig: drive ? drive.keySig || '' : '', keyAt: drive ? drive.keyAt || 0 : 0 };      // the key file's id and state survive a reconnect
   try {
     const r = await driveApi('GET', '/drive/v3/about?fields=user(emailAddress)', null, nd);
     nd.email = r.user && r.user.emailAddress || nd.email;
@@ -108,20 +108,39 @@ async function driveFolder() {
   }
   drive.folderId = id; await storeDrive(); return id;
 }
+// the subfolder of the main folder that holds the sealed files and the key file (since v21), so
+// that the main folder reads as the readable copies; made the same way, both devices converge
+async function driveArchive() {
+  const parent = await driveFolder();
+  if (drive.archiveId) { try { const f = await driveApi('GET', '/drive/v3/files/' + drive.archiveId + '?fields=id,trashed'); if (f && !f.trashed) return drive.archiveId; } catch (e) { if (e.reconnect) throw e; } }
+  const q = '/drive/v3/files?spaces=drive&fields=files(id,createdTime)&q=' + driveQ("name='" + DRIVE.archive + "' and mimeType='application/vnd.google-apps.folder' and '" + parent + "' in parents and trashed=false");
+  const found = await driveApi('GET', q);
+  let id = found.files && found.files.length ? oldest(found.files).id : '';
+  if (!id) {
+    id = (await driveApi('POST', '/drive/v3/files?fields=id', { name: DRIVE.archive, mimeType: 'application/vnd.google-apps.folder', parents: [parent] })).id;
+    const again = await driveApi('GET', q); if (again.files && again.files.length > 1) { const keep = oldest(again.files).id; if (keep !== id) { try { await driveApi('PATCH', '/drive/v3/files/' + id + '?fields=id', { trashed: true }); } catch (e) {} id = keep; } }
+  }
+  drive.archiveId = id; await storeDrive(); return id;
+}
+// a file from one folder into another (a file that is gone already counts as moved)
+async function driveMove(id, from, to) {
+  try { await driveApi('PATCH', '/drive/v3/files/' + encodeURIComponent(id) + '?addParents=' + encodeURIComponent(to) + '&removeParents=' + encodeURIComponent(from) + '&fields=id', {}); }
+  catch (e) { if (e.reconnect || e.status !== 404) throw e; }
+}
 // a file larger than the one-request limit goes up in the resumable form: the metadata first, then the body to the address Google names
 async function driveUploadBody(meta, blob, fileId) {
   const method = fileId ? 'PATCH' : 'POST', base = '/upload/drive/v3/files' + (fileId ? '/' + encodeURIComponent(fileId) : '');      // with a file id the content of that file is replaced
   if (blob.size <= DRIVE_MULTIPART_MAX) return driveApi(method, base + '?uploadType=multipart&fields=id', multipart(meta, blob));
-  const r = await fetch(DRIVE.api + base + '?uploadType=resumable&fields=id', { method, headers: { Authorization: 'Bearer ' + drive.token, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/octet-stream', 'X-Upload-Content-Length': String(blob.size) }, body: JSON.stringify(meta), credentials: 'omit', cache: 'no-store' });
+  const r = await fetch(DRIVE.api + base + '?uploadType=resumable&fields=id', { method, headers: { Authorization: 'Bearer ' + drive.token, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': blob.type || 'application/octet-stream', 'X-Upload-Content-Length': String(blob.size) }, body: JSON.stringify(meta), credentials: 'omit', cache: 'no-store' });
   if (r.status === 401) { const e = new Error('reconnect'); e.reconnect = true; throw e; }
   const loc = r.headers.get('Location'); if (!r.ok || !loc) throw new Error('Google Drive answered ' + r.status + ' to the upload request');
-  const up = await fetch(loc, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: blob, credentials: 'omit', cache: 'no-store' });
+  const up = await fetch(loc, { method: 'PUT', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob, credentials: 'omit', cache: 'no-store' });
   if (!up.ok) throw new Error('Google Drive answered ' + up.status + ' to the upload');
   return up.json();
 }
 function multipart(meta, blob) {
   const b = 'lb' + uid().replace(/-/g, '');
-  return new Blob(['--' + b + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(meta) + '\r\n--' + b + '\r\nContent-Type: application/octet-stream\r\n\r\n', blob, '\r\n--' + b + '--'], { type: 'multipart/related; boundary=' + b });
+  return new Blob(['--' + b + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(meta) + '\r\n--' + b + '\r\nContent-Type: ' + (blob.type || 'application/octet-stream') + '\r\n\r\n', blob, '\r\n--' + b + '--'], { type: 'multipart/related; boundary=' + b });
 }
 // one sealed file (the full picture or the thumbnail) into the folder; returns the Drive file id
 // The name of a file in Drive carries the date taken and the original name, so the folder reads
@@ -141,13 +160,20 @@ function driveNameFor(p, kind, idx, takenAt) {
 }
 const driveTimes = p => { const t = new Date(p.taken_at).toISOString(); return { createdTime: t, modifiedTime: t }; };
 async function driveUpload(p, name, kind, blob) {
-  return (await driveUploadBody(Object.assign({ name, parents: [await driveFolder()], appProperties: { lb: p.id, k: kind } }, driveTimes(p)), blob)).id;
+  return (await driveUploadBody(Object.assign({ name, parents: [await driveArchive()], appProperties: { lb: p.id, k: kind } }, driveTimes(p)), blob)).id;
+}
+// the readable copy: the picture as it was, named like its sealed file without ".lb", in the main folder, with its own type so Drive shows it
+const clearName = p => driveNameFor(p, 'f', undefined, p.taken_at).replace(/\.lb$/, '');
+async function driveUploadClear(p, blob) {
+  const body = blob.type === p.type ? blob : new Blob([blob], { type: p.type });
+  return (await driveUploadBody(Object.assign({ name: clearName(p), mimeType: p.type, parents: [await driveFolder()], appProperties: { lb: p.id, k: 'c' } }, driveTimes(p)), body)).id;
 }
 // the files of a photo named after its current date (after a date change, or for files named by an older release)
 async function driveRename(p) {
   const jobs = [];
   if (p.df) jobs.push([p.df, driveName(p, 'f')]);
   if (p.dt) jobs.push([p.dt, driveName(p, 't')]);
+  if (p.dc) jobs.push([p.dc, clearName(p)]);
   (p.dfs || []).forEach((id, i) => { if (id) jobs.push([id, driveName(p, 'f', i)]); });
   for (const [id, name] of jobs) await driveApi('PATCH', '/drive/v3/files/' + encodeURIComponent(id) + '?fields=id', Object.assign({ name }, driveTimes(p)));
 }
@@ -163,6 +189,14 @@ async function driveTrash(id) {
   catch (e) { if (e.reconnect) throw e; return e.status === 404; }
 }
 function setDriveState(s, msg) { driveState = s; driveMsg = msg; renderSyncLine(); renderDriveBox(); }
+// readable copies: the photos that get one, and the part of the menu that shows and switches them
+const clearWanted = () => photos.filter(p => !p.deleted && !p.stub && p.up && p.st === 'gd' && !protFolder(p.folder));
+function clearBox() {
+  const all = clearWanted(), have = all.filter(p => p.dc).length, left = all.length - have, copies = photos.filter(p => !p.deleted && p.dc).length;
+  if (settings.clearRemove) return '<div class="hint">Removing the readable copies from Drive: ' + copies + ' to go (continues on its own)</div>';
+  if (settings.clear) return '<div class="hint">Readable copies in Drive: on · ' + have + ' of ' + all.length + (left ? ' done, ' + left + ' to go (continues on its own)' : ' done') + '. New photos get one as they are uploaded; photos in protected folders never.</div><button id="clearStop" class="btn quiet">Stop making readable copies</button>' + (have ? '<button id="clearRemove" class="btn quiet">Remove the ' + have + ' readable copies from Drive</button>' : '');
+  return '<div class="hint">The main folder can also hold every photo as a plain, readable file, for looking at them in Drive or on the PC without this app. Whoever can open your Google account can see those copies then, on this phone too. Protected folders are never copied.</div><button id="clearOn" class="btn">Keep readable copies in Drive' + (left ? ' (' + left + (left === 1 ? ' photo' : ' photos') + ')' : '') + '</button>' + (copies ? '<button id="clearRemove" class="btn quiet">Remove the ' + copies + ' readable copies from Drive</button>' : '');
+}
 function renderDriveBox() {
   const box = $('driveBox'); if (!box) return;
   if (!DRIVE) { box.innerHTML = '<p>Google Drive is not set up in this version: your photos go to the Supabase cloud.</p>'; return; }
@@ -179,7 +213,13 @@ function renderDriveBox() {
     (drive.folderId ? '<a id="driveOpen" class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="https://drive.google.com/drive/folders/' + encodeURIComponent(drive.folderId) + '" target="_blank" rel="noopener">Open the folder in Google Drive</a>' : '<div class="hint">The folder in Drive is made with the first upload; its link appears here then.</div>') + keyfileLine() +
     (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '<button id="driveNowBtn" class="btn">Sync now</button>') +
     (left ? (settings.moveToDrive ? '<div class="hint">Moving to Drive: ' + Math.max(0, (+settings.moveTotal || left) - left) + ' of ' + Math.max(+settings.moveTotal || 0, left) + ' done, ' + left + ' to go (continues on its own)</div>' : '<button id="driveMove" class="btn">Move ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive</button>') : '') +
+    clearBox() +
     '<button id="driveOff" class="btn quiet">Disconnect Google Drive</button>';
+  if ($('driveOpen')) $('driveOpen').addEventListener('click', () => { linkTap = Date.now(); });
+  if ($('restoreOpen')) $('restoreOpen').addEventListener('click', () => { linkTap = Date.now(); });
+  if ($('clearOn')) $('clearOn').addEventListener('click', () => popup('Readable copies in Drive?', 'Every photo outside protected folders gets a plain copy in the Drive folder, readable by whoever can open your Google account, on this phone too (the Drive app). The sealed files stay in the subfolder "' + DRIVE.archive + '" for the app and for restoring.', [{ label: 'Make readable copies', cls: 'primary', fn: () => { settings.clear = true; settings.clearRemove = false; settings.clearTotal = clearWanted().length; saveSettings(); renderDriveBox(); toast('Making readable copies. You can close the menu.'); syncRetry(); } }, { label: 'Not now', cls: 'quiet' }]));
+  if ($('clearStop')) $('clearStop').addEventListener('click', () => { settings.clear = false; settings.clearTotal = 0; saveSettings(); renderDriveBox(); });
+  if ($('clearRemove')) $('clearRemove').addEventListener('click', () => popup('Remove the readable copies from Drive?', 'They go to the Drive bin. The sealed files and the app are not affected.', [{ label: 'Remove them', cls: 'danger', fn: () => { settings.clear = false; settings.clearRemove = true; saveSettings(); renderDriveBox(); syncRetry(); } }, { label: 'Keep them', cls: 'quiet' }]));
   if ($('driveRe')) $('driveRe').addEventListener('click', () => driveConnect(false));
   if ($('driveNowBtn')) $('driveNowBtn').addEventListener('click', () => { driveTried = false; syncRetry(); });
   if ($('driveMove')) $('driveMove').addEventListener('click', () => { settings.moveToDrive = true; settings.moveTotal = left; saveSettings(); renderDriveBox(); toast('Moving your photos to Drive. You can close the menu.'); syncRetry(); });

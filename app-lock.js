@@ -2,6 +2,7 @@
 /* Lieblingsbilder lock screen and the sheets (the menu with cloud sync and the app lock, and the
    small sheets of the viewer). Taken over from Snapdoc. */
 let locked = false, softLock = false, unlocking = false, hiddenAt = 0, pinStep = false, hideTimer = null, softTimer = null, storageAtRisk = false;
+let linkTap = 0, leftViaLink = false; const LINK_GRACE = 180000;      // a link of the menu (the Drive folder, the restore page) was tapped: leaving through it locks after three minutes, not at once
 const unlockWaiters = [];
 const COVERED = ['home', 'view', 'sheet'];
 const lockAfterMs = () => (+settings.lockAfter || 0) * 1000;
@@ -111,16 +112,16 @@ function linkOpened() {
 document.addEventListener('visibilitychange', () => {
   clearTimeout(hideTimer);
   if (document.hidden) {
-    hiddenAt = Date.now();
-    // the photo picker is part of the app's own flow (the plus was tapped a moment ago): it does not count as leaving
-    if (Vault.lockType() && !locked && !pickerOpen) hideTimer = setTimeout(() => { if (document.hidden && !pickerOpen) relock(); }, lockAfterMs() + 500);
+    hiddenAt = Date.now(); leftViaLink = Date.now() - linkTap < 4000;
+    // the photo picker is part of the app's own flow (the plus was tapped a moment ago): it does not count as leaving; a link of the menu gives three minutes
+    if (Vault.lockType() && !locked && !pickerOpen) hideTimer = setTimeout(() => { if (document.hidden && !pickerOpen) relock(); }, (leftViaLink ? Math.max(lockAfterMs(), LINK_GRACE) : lockAfterMs()) + 500);
     return;
   }
-  const away = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = 0;
+  const away = hiddenAt ? Date.now() - hiddenAt : 0, grace = leftViaLink ? Math.max(lockAfterMs(), LINK_GRACE) : lockAfterMs(); hiddenAt = 0; leftViaLink = false;
   if (passive || restarting) return;
   const fromPicker = pickerOpen;
   if (pickerOpen) setTimeout(() => { pickerOpen = false; }, 3000);
-  if (Vault.lockType() && !locked && !fromPicker && away >= lockAfterMs()) relock();
+  if (Vault.lockType() && !locked && !fromPicker && away >= grace) relock();
   if (locked) { if (Vault.lockType() !== 'pin' && !unlocking) tryUnlock(); return; }
   if (!Vault.isOpen()) return;
   takeShared(); syncNow(); checkForUpdate();

@@ -175,6 +175,22 @@ of the PC (Chrome, Edge) or as downloads. A video is put together from its piece
 needs, in the worst case, only three things: the Drive folder, the password, and this page (it
 lives in the repository and at the app's address; a copy on a USB stick works too).
 
+**Readable copies, and the archive subfolder (since v21).** The owner wished to see the pictures
+in Drive as pictures. So the main folder "Lieblingsbilder" can hold, at the owner's choice (menu,
+Google Drive, "Keep readable copies in Drive", asked once with the consequence spelled out), one
+plain copy of every photo outside protected folders, named like its sealed file without `.lb`,
+with its own type and the date taken as its Drive time, so the folder reads like an album. The
+sealed files and the key file sit in the subfolder "Archive (encrypted)" (files of releases before
+v21 move there, a few hundred per pass). The copy is made in the sync pass, one photo at a time
+(`dc` in the entry: its Drive id, synced like the other file ids; the full picture is fetched
+without being kept on the device); it is renamed with the sealed files after a date change, goes
+to the bin with the photo, and goes when the photo moves into a protected folder or its folder is
+protected. "Stop" keeps what is there, "Remove" moves the copies to the bin, one by one. Honest
+consequence, said in the menu: whoever can open the Google account sees these copies, on the
+phone too (the Drive app); the app's lock and the sealed files do not cover them. The lock also
+learnt that a link tapped in the menu (the Drive folder, the restore page) is not leaving the
+app: it locks after three minutes then, not at once.
+
 Set-up (once, by the owner), as for Snapdoc: Google Cloud Console → project → enable the Google
 Drive API → OAuth consent screen (external, scope `.../auth/drive.file`) → Credentials → OAuth
 client ID, type "Web application", authorised JavaScript origin `https://smisery-prrivate.github.io`,
@@ -223,6 +239,12 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v21 (2026-11-24): readable copies in Drive at the owner's choice, the sealed files and the key file
+  in the subfolder "Archive (encrypted)"; a link tapped in the menu locks the app after three
+  minutes instead of at once. Tested: copies made for every photo outside the protected folder
+  (byte for byte, typed, dated), none for the protected one, the copy gone with a move into a
+  protected folder and with a delete, renamed after a date change, removed on request, sealed files
+  of v20 moved into the subfolder.
 - v20 (2026-11-15): Drive alone is a backup: the recovery key file `lieblingsbilder-keys.lb` beside
   the photos (the envelope and the sealed index, a protected folder's part under its passphrase,
   carried over while the folder is closed) and `restore.html`, which turns the downloaded folder
