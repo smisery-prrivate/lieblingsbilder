@@ -668,7 +668,7 @@ function renderSyncBox() {
       '<button id="syncBtn" class="btn">Sync now</button><button id="pwChange" class="btn quiet">Change encryption password</button>' + signOutBtn;
     $('pwChange').addEventListener('click', () => { keyNeed = 'change'; renderSyncBox(); });
   }
-  if ($('syncBtn')) $('syncBtn').addEventListener('click', syncRetry);
+  if ($('syncBtn')) $('syncBtn').addEventListener('click', () => { if (DRIVE) driveTried = false; syncRetry(); });      // the one Sync now of the menu: Drive may try its quiet reconnect again too
   if ($('signOut')) $('signOut').addEventListener('click', () => popup('Sign out on this device?', 'Your photos stay on this phone. They stop syncing until you sign in and enter your encryption password again.', [{ label: 'Sign out', fn: signOut }, { label: 'Stay signed in', cls: 'quiet' }]));
 }
 

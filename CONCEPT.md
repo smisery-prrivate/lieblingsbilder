@@ -239,6 +239,7 @@ into the `ASSETS` list in `sw.js`.
 
 ## History
 
+- v22 (2026-11-28): one "Sync now" in the menu (under Cloud sync; the Drive box had a second one).
 - v21 (2026-11-24): readable copies in Drive at the owner's choice, the sealed files and the key file
   in the subfolder "Archive (encrypted)"; a link tapped in the menu locks the app after three
   minutes instead of at once. Tested: copies made for every photo outside the protected folder

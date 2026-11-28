@@ -211,7 +211,7 @@ function renderDriveBox() {
   const line = driveState === 'reconnect' ? 'The connection has run out. Tap Reconnect to continue.' : driveState === 'error' ? driveMsg : n + (n === 1 ? ' photo' : ' photos') + ' in Drive' + (waiting ? ' · ' + waiting + ' waiting' : '');
   box.innerHTML = '<div class="statecard' + (err ? ' err' : '') + '"><div class="t">Google Drive · ' + esc(drive.email || '') + '</div><div class="s">Folder "' + esc(DRIVE.folder) + '" · ' + esc(line) + '</div></div>' +
     (drive.folderId ? '<a id="driveOpen" class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none" href="https://drive.google.com/drive/folders/' + encodeURIComponent(drive.folderId) + '" target="_blank" rel="noopener">Open the folder in Google Drive</a>' : '<div class="hint">The folder in Drive is made with the first upload; its link appears here then.</div>') + keyfileLine() +
-    (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '<button id="driveNowBtn" class="btn">Sync now</button>') +
+    (driveState === 'reconnect' ? '<button id="driveRe" class="btn primary">Reconnect</button>' : '') +      // one "Sync now" for the whole menu: the one under Cloud sync
     (left ? (settings.moveToDrive ? '<div class="hint">Moving to Drive: ' + Math.max(0, (+settings.moveTotal || left) - left) + ' of ' + Math.max(+settings.moveTotal || 0, left) + ' done, ' + left + ' to go (continues on its own)</div>' : '<button id="driveMove" class="btn">Move ' + left + (left === 1 ? ' photo' : ' photos') + ' from the Supabase cloud to Drive</button>') : '') +
     clearBox() +
     '<button id="driveOff" class="btn quiet">Disconnect Google Drive</button>';
@@ -221,7 +221,6 @@ function renderDriveBox() {
   if ($('clearStop')) $('clearStop').addEventListener('click', () => { settings.clear = false; settings.clearTotal = 0; saveSettings(); renderDriveBox(); });
   if ($('clearRemove')) $('clearRemove').addEventListener('click', () => popup('Remove the readable copies from Drive?', 'They go to the Drive bin. The sealed files and the app are not affected.', [{ label: 'Remove them', cls: 'danger', fn: () => { settings.clear = false; settings.clearRemove = true; saveSettings(); renderDriveBox(); syncRetry(); } }, { label: 'Keep them', cls: 'quiet' }]));
   if ($('driveRe')) $('driveRe').addEventListener('click', () => driveConnect(false));
-  if ($('driveNowBtn')) $('driveNowBtn').addEventListener('click', () => { driveTried = false; syncRetry(); });
   if ($('driveMove')) $('driveMove').addEventListener('click', () => { settings.moveToDrive = true; settings.moveTotal = left; saveSettings(); renderDriveBox(); toast('Moving your photos to Drive. You can close the menu.'); syncRetry(); });
   $('driveOff').addEventListener('click', () => popup('Disconnect Google Drive?', 'The photos already in Drive stay there and can be shown again once it is connected. New photos go to the Supabase cloud meanwhile.', [{ label: 'Disconnect', cls: 'danger', fn: driveDisconnect }, { label: 'Keep it', cls: 'quiet' }]));
 }
